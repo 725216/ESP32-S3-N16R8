@@ -87,45 +87,55 @@ void wifi_init(void)
 // I2S麦克风初始化
 void i2s_mic_init()
 {
-    i2s_driver_install(I2S_PORT_MIC, &(i2s_config_t) {
-        .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
-        .sample_rate = SAMPLE_RATE,
-        .bits_per_sample = SAMPLE_BITS,
-        .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
-        .communication_format = I2S_COMM_FORMAT_STAND_I2S,
-        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
-        .dma_buf_count = 4,
-        .dma_buf_len = 512,
-    }, 0, NULL);
+    i2s_config_t i2s_cfg;
+    memset(&i2s_cfg, 0, sizeof(i2s_cfg));
+    i2s_cfg.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX);
+    i2s_cfg.sample_rate = SAMPLE_RATE;
+    i2s_cfg.bits_per_sample = SAMPLE_BITS;
+    i2s_cfg.channel_format = I2S_CHANNEL_FMT_ONLY_LEFT;
+    i2s_cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
+    i2s_cfg.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1;
+    i2s_cfg.dma_buf_count = 4;
+    i2s_cfg.dma_buf_len = 512;
 
-    i2s_set_pin(I2S_PORT_MIC, &(i2s_pin_config_t){
-        .bck_io_num = I2S_MIC_BCLK,
-        .ws_io_num = I2S_MIC_LRCK,
-        .data_out_num = I2S_PIN_NO_CHANGE,
-        .data_in_num = I2S_MIC_DIN
-    });
+    ESP_ERROR_CHECK(i2s_driver_install(I2S_PORT_MIC, &i2s_cfg, 0, NULL));
+
+    i2s_pin_config_t pin_cfg;
+    memset(&pin_cfg, 0, sizeof(pin_cfg));
+    pin_cfg.bck_io_num = I2S_MIC_BCLK;
+    pin_cfg.ws_io_num = I2S_MIC_LRCK;
+    pin_cfg.data_out_num = I2S_PIN_NO_CHANGE;
+    pin_cfg.data_in_num = I2S_MIC_DIN;
+    pin_cfg.mck_io_num = I2S_PIN_NO_CHANGE;
+
+    ESP_ERROR_CHECK(i2s_set_pin(I2S_PORT_MIC, &pin_cfg));
 }
 
 // I2S扬声器MAX98357初始化
 void i2s_spk_init()
 {
-    i2s_driver_install(I2S_PORT_SPK, &(i2s_config_t) {
-        .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
-        .sample_rate = SAMPLE_RATE,
-        .bits_per_sample = SAMPLE_BITS,
-        .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
-        .communication_format = I2S_COMM_FORMAT_STAND_I2S,
-        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
-        .dma_buf_count = 4,
-        .dma_buf_len = 512,
-    },0,NULL);
+    i2s_config_t i2s_cfg;
+    memset(&i2s_cfg, 0, sizeof(i2s_cfg));
+    i2s_cfg.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX);
+    i2s_cfg.sample_rate = SAMPLE_RATE;
+    i2s_cfg.bits_per_sample = SAMPLE_BITS;
+    i2s_cfg.channel_format = I2S_CHANNEL_FMT_ONLY_LEFT;
+    i2s_cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
+    i2s_cfg.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1;
+    i2s_cfg.dma_buf_count = 4;
+    i2s_cfg.dma_buf_len = 512;
 
-    i2s_set_pin(I2S_PORT_SPK, &(i2s_pin_config_t){
-        .bck_io_num = I2S_SPK_BCLK,
-        .ws_io_num = I2S_SPK_LRCK,
-        .data_out_num = I2S_SPK_DOUT,
-        .data_in_num = I2S_PIN_NO_CHANGE
-    });
+    ESP_ERROR_CHECK(i2s_driver_install(I2S_PORT_SPK, &i2s_cfg,0,NULL));
+
+    i2s_pin_config_t pin_cfg;
+    memset(&pin_cfg, 0, sizeof(pin_cfg));
+    pin_cfg.bck_io_num = I2S_SPK_BCLK;
+    pin_cfg.ws_io_num = I2S_SPK_LRCK;
+    pin_cfg.data_out_num = I2S_SPK_DOUT;
+    pin_cfg.data_in_num = I2S_PIN_NO_CHANGE;
+    pin_cfg.mck_io_num = I2S_PIN_NO_CHANGE;
+
+    ESP_ERROR_CHECK(i2s_set_pin(I2S_PORT_SPK, &pin_cfg));
 }
 
 // 按键初始化
