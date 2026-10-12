@@ -9,6 +9,7 @@
 #include "nvs_flash.h"
 #include "esp_http_server.h"
 #include <cstring>
+#include <cstdio>
 
 static const char *TAG = "AI_CHAT";
 
@@ -30,38 +31,90 @@ static const char *TAG = "AI_CHAT";
 #define RECORD_BUF_SAMPLES 1024
 static int16_t mic_buffer[RECORD_BUF_SAMPLES];
 
-// AP热点配置（手机连接这个热点）
+// ESP32本地AP热点【无密码开放热点】
 #define AP_SSID "ESP32S3_CHATBOT"
-#define AP_PASS "12345678"
 
-// 全局标记
 bool g_wifi_connected = false;
 httpd_handle_t web_server = NULL;
 
-// ========== Web网页配网页面 ==========
+// ========== 网页：WiFi扫描，自动识别开放WiFi ==========
 static const char *html_page = R"HTML(
 <!DOCTYPE html>
 <html>
-<head><meta charset="utf-8"><title>ESP32 WiFi配网</title></head>
+<head>
+<meta charset="utf-8">
+<title>ESP32 WiFi配网</title>
+<script>
+async function scanWifi(){
+  const res = await fetch('/scan');
+  const data = await res.json();
+  const sel = document.getElementById('wifiList');
+  sel.innerHTML = "";
+  data.wifi.forEach(item=>{
+    const opt = document.createElement('option');
+    opt.value = item.ssid;
+    opt.textContent = item.ssid + (item.is_open ? " 【无密码】" : "");
+    opt.dataset.open = item.is_open;
+    sel.appendChild(opt);
+  })
+}
+function selectWifi(){
+  const sel = document.getElementById('wifiList');
+  const opt = sel.options[sel.selectedIndex];
+  document.getElementById('ssid').value = opt.value;
+  const isOpen = opt.dataset.open === "true";
+  document.getElementById('pwdRow').style.display = isOpen ? "none" : "block";
+}
+window.onload = scanWifi;
+</script>
+</head>
 <body>
-<h2>填入2.4G WiFi信息</h2>
+<h2>附近2.4G WiFi列表</h2>
+<select id="wifiList" size="8" onchange="selectWifi()">
+  <option>正在扫描WiFi...</option>
+</select>
+<br>
 <form action="/setwifi" method="post">
-SSID:<br><input name="ssid"><br>
-密码:<br><input name="password"><br>
-<button type="submit">保存并重启</button>
+SSID:<br><input id="ssid" name="ssid" readonly><br>
+<div id="pwdRow">密码:<br><input name="password"><br></div>
+<button type="submit">保存并重启设备</button>
 </form>
 </body>
 </html>
 )HTML";
 
-// 网页根路径
+// 扫描WiFi接口，返回JSON
+static esp_err_t wifi_scan_handler(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "application/json");
+    esp_wifi_scan_start(NULL, true);
+    uint16_t ap_num = 0;
+    esp_wifi_scan_get_ap_num(&ap_num);
+    wifi_ap_record_t ap_records[20];
+    esp_wifi_scan_get_ap_records(&ap_num, ap_records);
+
+    char json_buf[1024];
+    int pos = sprintf(json_buf, "{\"wifi\":[");
+    for(int i=0; i<ap_num; i++)
+    {
+        wifi_ap_record_t *r = &ap_records[i];
+        bool is_open = (r->authmode == WIFI_AUTH_OPEN);
+        pos += sprintf(json_buf+pos, "{\"ssid\":\"%s\",\"is_open\":%s},", r->ssid, is_open?"true":"false");
+    }
+    if(ap_num>0) json_buf[pos-1] = ']';
+    else strcpy(json_buf+pos, "]}");
+    httpd_resp_sendstr(req, json_buf);
+    return ESP_OK;
+}
+
+// 网页主页
 static esp_err_t get_root_handler(httpd_req_t *req)
 {
     httpd_resp_send(req, html_page, HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
 }
 
-// 接收WiFi表单提交
+// 接收WiFi配置，支持空密码
 static esp_err_t setwifi_handler(httpd_req_t *req)
 {
     char buf[128];
@@ -73,11 +126,10 @@ static esp_err_t setwifi_handler(httpd_req_t *req)
     httpd_query_key_value(buf, "ssid", ssid, sizeof(ssid));
     httpd_query_key_value(buf, "password", pass, sizeof(pass));
 
-    // 存入NVS
     nvs_handle_t nvs;
     nvs_open("wifi_cfg", NVS_READWRITE, &nvs);
     nvs_set_str(nvs, "ssid", ssid);
-    nvs_set_str(nvs, "password", pass);
+    nvs_set_str(nvs, "password", pass); //无密码WiFi存入空字符串
     nvs_commit(nvs);
     nvs_close(nvs);
 
@@ -88,19 +140,19 @@ static esp_err_t setwifi_handler(httpd_req_t *req)
 }
 
 static const httpd_uri_t uri_root = {.uri="/", .method=HTTP_GET, .handler=get_root_handler};
+static const httpd_uri_t uri_scan = {.uri="/scan", .method=HTTP_GET, .handler=wifi_scan_handler};
 static const httpd_uri_t uri_setwifi = {.uri="/setwifi", .method=HTTP_POST, .handler=setwifi_handler};
 
-// 启动web服务器
 void start_web_server()
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     httpd_start(&web_server, &config);
     httpd_register_uri_handler(web_server, &uri_root);
+    httpd_register_uri_handler(web_server, &uri_scan);
     httpd_register_uri_handler(web_server, &uri_setwifi);
-    ESP_LOGI(TAG,"Web配网页面已启动，连接热点 %s",AP_SSID);
+    ESP_LOGI(TAG,"✅配网热点已启动：%s（无密码，直接连接）",AP_SSID);
 }
 
-// 加载NVS里保存的WiFi
 bool load_wifi_from_nvs(char *ssid, char *pwd)
 {
     nvs_handle_t nvs;
@@ -114,7 +166,6 @@ bool load_wifi_from_nvs(char *ssid, char *pwd)
     return (ssid[0] != 0);
 }
 
-// WiFi事件回调
 static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data)
 {
     if(event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
@@ -122,15 +173,13 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
     }
     else if(event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         if(!g_wifi_connected) {
-            ESP_LOGW(TAG,"STA联网失败，切换到AP配网模式");
+            ESP_LOGW(TAG,"STA联网失败，切换AP配网模式");
             esp_wifi_stop();
-            // 开启AP热点
             wifi_config_t ap_cfg;
             memset(&ap_cfg,0,sizeof(ap_cfg));
             strcpy((char*)ap_cfg.ap.ssid, AP_SSID);
-            strcpy((char*)ap_cfg.ap.password, AP_PASS);
             ap_cfg.ap.max_connection = 1;
-            ap_cfg.ap.authmode = WIFI_AUTH_WPA2_PSK;
+            ap_cfg.ap.authmode = WIFI_AUTH_OPEN; //【开放热点，无密码】
             esp_wifi_set_mode(WIFI_MODE_AP);
             esp_wifi_set_config(WIFI_IF_AP, &ap_cfg);
             esp_wifi_start();
@@ -165,7 +214,7 @@ void wifi_ap_sta_init(void)
     char ssid[32]={0}, pwd[64]={0};
     if(load_wifi_from_nvs(ssid,pwd))
     {
-        ESP_LOGI(TAG,"NVS读取到WiFi，尝试连接：%s",ssid);
+        ESP_LOGI(TAG,"读取NVS保存WiFi，尝试连接：%s",ssid);
         wifi_config_t sta_cfg;
         memset(&sta_cfg,0,sizeof(sta_cfg));
         strcpy((char*)sta_cfg.sta.ssid, ssid);
@@ -174,13 +223,12 @@ void wifi_ap_sta_init(void)
         esp_wifi_set_config(WIFI_IF_STA, &sta_cfg);
         esp_wifi_start();
     }else{
-        ESP_LOGI(TAG,"NVS无WiFi配置，直接启动AP配网热点");
+        ESP_LOGI(TAG,"NVS无WiFi配置，启动无密码AP热点");
         wifi_config_t ap_cfg;
         memset(&ap_cfg,0,sizeof(ap_cfg));
         strcpy((char*)ap_cfg.ap.ssid, AP_SSID);
-        strcpy((char*)ap_cfg.ap.password, AP_PASS);
         ap_cfg.ap.max_connection = 1;
-        ap_cfg.ap.authmode = WIFI_AUTH_WPA2_PSK;
+        ap_cfg.ap.authmode = WIFI_AUTH_OPEN; //开放无密码
         esp_wifi_set_mode(WIFI_MODE_AP);
         esp_wifi_set_config(WIFI_IF_AP, &ap_cfg);
         esp_wifi_start();
@@ -250,7 +298,6 @@ void key_init(void)
     gpio_config(&io_conf);
 }
 
-// 读取I2S麦克风PCM数据
 size_t read_mic_pcm(int16_t *buf, size_t sample_count)
 {
     size_t bytes_read;
@@ -285,7 +332,6 @@ extern "C" void app_main(void)
         if(is_recording)
         {
             size_t samples = read_mic_pcm(mic_buffer, RECORD_BUF_SAMPLES);
-            ESP_LOGD(TAG, "采集到 %d PCM样本", (int)samples);
         }
         vTaskDelay(pdMS_TO_TICKS(20));
     }
