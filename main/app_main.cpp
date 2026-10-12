@@ -40,7 +40,7 @@ typedef enum {
 } ai_agent_t;
 ai_agent_t g_current_ai = AI_DOUBAO;
 
-// ============ I2S引脚定义（全部用GPIO_NUM_xx 修复类型错误） ============
+// ============ I2S引脚定义 ============
 // I2S0: MAX98357A 功放输出
 #define I2S_TX_BCLK  GPIO_NUM_42
 #define I2S_TX_LRCK  GPIO_NUM_41
@@ -225,8 +225,7 @@ void wifi_sta_init(const char* ssid, const char* pass)
 // I2S 输出 MAX98357A TTS功放
 void i2s_tx_init(void)
 {
-    // ========== 修复点：IDF5.3使用 I2S_ROLE_TRANSMITTER ==========
-    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_TRANSMITTER);
+    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
     ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, &tx_handle, NULL));
 
     i2s_std_config_t std_cfg = {
@@ -251,8 +250,7 @@ void i2s_tx_init(void)
 // I2S 输入 INMP441麦克风
 void i2s_rx_init(void)
 {
-    // ========== 修复点：IDF5.3使用 I2S_ROLE_RECEIVER ==========
-    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_1, I2S_ROLE_RECEIVER);
+    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_1, I2S_ROLE_MASTER);
     ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, NULL, &rx_handle));
 
     i2s_std_config_t std_cfg = {
