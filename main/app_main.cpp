@@ -225,11 +225,10 @@ void wifi_sta_init(const char* ssid, const char* pass)
 // I2S 输出 MAX98357A TTS功放
 void i2s_tx_init(void)
 {
-    // 第一步：通道基础配置
-    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_TX);
+    // ========== 修复点：IDF5.3使用 I2S_ROLE_TRANSMITTER ==========
+    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_TRANSMITTER);
     ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, &tx_handle, NULL));
 
-    // 第二步：标准模式参数
     i2s_std_config_t std_cfg = {
         .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(16000),
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO),
@@ -252,11 +251,10 @@ void i2s_tx_init(void)
 // I2S 输入 INMP441麦克风
 void i2s_rx_init(void)
 {
-    // 第一步：通道基础配置
-    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_1, I2S_ROLE_RX);
+    // ========== 修复点：IDF5.3使用 I2S_ROLE_RECEIVER ==========
+    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_1, I2S_ROLE_RECEIVER);
     ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, NULL, &rx_handle));
 
-    // 第二步：标准模式参数
     i2s_std_config_t std_cfg = {
         .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(16000),
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO),
