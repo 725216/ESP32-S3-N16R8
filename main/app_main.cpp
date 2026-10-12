@@ -52,11 +52,12 @@ ai_selected_t g_current_ai = AI_DOUBAO;
 #define I2S_RX_LRCK_PIN 11
 #define I2S_RX_DATA_IN_PIN 12
 
-// 全局
+// 全局状态
 httpd_handle_t web_server = NULL;
 bool g_sta_connected = false;
-char g_sta_ssid[33] = {0};
-char g_sta_pass[65] = {0};
+bool g_ap_mode = false;
+uint32_t g_wifi_retry_count = 0;
+#define WIFI_MAX_RETRY 8  // 重试8次失败后切AP配网
 
 // ===================== WEB网页HTML页面 =====================
 static const char* html_page =
@@ -110,6 +111,7 @@ esp_err_t handle_save(httpd_req_t *req)
 // 启动网页服务器
 void start_web_server(void)
 {
+    if(web_server != NULL) return;
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 80;
     httpd_start(&web_server, &config);
@@ -124,6 +126,7 @@ void start_web_server(void)
 // AP模式初始化（配网热点）
 void wifi_ap_init(void)
 {
+    esp_wifi_stop();
     esp_netif_create_default_wifi_ap();
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     esp_wifi_init(&cfg);
@@ -136,10 +139,11 @@ void wifi_ap_init(void)
             .authmode = WIFI_AUTH_OPEN
         }
     };
-    esp_wifi_set_mode(WIFI_MODE_APSTA);
+    esp_wifi_set_mode(WIFI_MODE_AP);
     esp_wifi_set_config(WIFI_IF_AP, &ap_cfg);
     esp_wifi_start();
-    ESP_LOGI(TAG,"🔥 AP配网热点开启：%s", AP_SSID);
+    g_ap_mode = true;
+    ESP_LOGI(TAG,"🔥 AP配网热点开启：%s，WiFi找不到，可网页重新配网", AP_SSID);
     start_web_server();
 }
 
@@ -167,13 +171,22 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
         esp_wifi_connect();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_event_sta_disconnected_t *disconn = (wifi_event_sta_disconnected_t *)event_data;
-        ESP_LOGW(TAG, "WiFi断开，原因码:%d，重试", disconn->reason);
+        ESP_LOGW(TAG, "WiFi断开，原因码:%d，重试次数:%d", disconn->reason, g_wifi_retry_count);
         g_sta_connected = false;
+        g_wifi_retry_count ++;
+
+        if(g_wifi_retry_count >= WIFI_MAX_RETRY)
+        {
+            ESP_LOGE(TAG,"❌ WiFi多次连接失败，切换到AP配网模式");
+            wifi_ap_init();
+            return;
+        }
         esp_wifi_connect();
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
         ESP_LOGI(TAG, "✅ WiFi连接成功，IP:" IPSTR, IP2STR(&event->ip_info.ip));
         g_sta_connected = true;
+        g_wifi_retry_count = 0; //连接成功，清空重试计数
     }
 }
 
