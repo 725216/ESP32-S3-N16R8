@@ -11,7 +11,7 @@
 #include "esp_event.h"
 #include "nvs_flash.h"
 #include "esp_log.h"
-#include "esp_websocket_client.h"
+//#include "esp_websocket_client.h"
 #include "cJSON.h"
 
 static const char *TAG = "AI_CHAT";
@@ -203,11 +203,7 @@ void ai_chat_task(void *pvParam)
             }
             else
             {
-                // 这里：循环读取I2S音频，流式发送websocket ASR
-                // =====================
-                // 【核心逻辑占位】
-                // 豆包/Coze WebSocket 流式语音上传，接收返回音频TTS，送入i2s_play_audio播放
-                // =====================
+                // 后续添加websocket流式语音代码
             }
         }
         if(!ptt_now && ptt_prev)
