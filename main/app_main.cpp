@@ -53,6 +53,10 @@ ai_agent_t g_current_ai = AI_DOUBAO;
 #define I2S_RX_LRCK  39
 #define I2S_RX_DIN   48
 
+// 全局句柄（放到全局，方便后面录音/播放任务调用）
+i2s_chan_handle_t tx_handle = NULL;
+i2s_chan_handle_t rx_handle = NULL;
+
 // 全局状态
 httpd_handle_t web_server = NULL;
 bool g_sta_connected = false;
@@ -132,7 +136,6 @@ void wifi_ap_init(void)
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     esp_wifi_init(&cfg);
 
-    // ========== 修复：wifi_ap_config_t 成员顺序和结构体定义保持一致 ==========
     wifi_config_t ap_cfg = {
         .ap = {
             .ssid = AP_SSID,
@@ -168,7 +171,7 @@ esp_err_t read_wifi_nvs(char *ssid, char *pass)
     return ret;
 }
 
-// WiFi事件回调【修复格式打印】
+// WiFi事件回调
 static void wifi_event_handler(void* arg, esp_event_base_t event_base,
                                int32_t event_id, void* event_data)
 {
@@ -192,7 +195,7 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
         ESP_LOGI(TAG, "✅ WiFi连接成功，IP:" IPSTR, IP2STR(&event->ip_info.ip));
         g_sta_connected = true;
-        g_wifi_retry_count = 0; //连接成功，清空重试计数
+        g_wifi_retry_count = 0;
     }
 }
 
@@ -239,7 +242,6 @@ void i2s_tx_init(void)
             },
         },
     };
-    i2s_channel_handle_t tx_handle;
     ESP_ERROR_CHECK(i2s_new_channel(&i2s_cfg, &tx_handle, NULL));
     ESP_ERROR_CHECK(i2s_channel_enable(tx_handle));
     ESP_LOGI(TAG, "I2S TX(功放)初始化成功");
@@ -262,7 +264,6 @@ void i2s_rx_init(void)
             },
         },
     };
-    i2s_channel_handle_t rx_handle;
     ESP_ERROR_CHECK(i2s_new_channel(&i2s_cfg, NULL, &rx_handle));
     ESP_ERROR_CHECK(i2s_channel_enable(rx_handle));
     ESP_LOGI(TAG, "I2S RX(麦克风)初始化成功");
