@@ -2,76 +2,211 @@
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "nvs_flash.h"
+#include "nvs.h"
 #include "esp_log.h"
 #include "driver/i2s.h"
+#include "driver/gpio.h"
+#include "esp_http_server.h"
+#include "esp_netif.h"
 
 static const char *TAG = "CHATBOT";
 
-// ========= WiFi配置 =========
-#define WIFI_SSID "你的WIFI名称"
-#define WIFI_PASS "你的WIFI密码"
+// ============ NVS 存储KEY ============
+#define WIFI_NVS_NAMESPACE "wifi_cfg"
+#define NVS_KEY_SSID "ssid"
+#define NVS_KEY_PASS "pass"
 
+// ============ AP配网热点配置 ============
+#define AP_SSID "ESP32-CHAT-SETUP"
+#define AP_PASSWORD ""
+#define AP_IP_ADDR "192.168.4.1"
+
+// ============ 4个按键GPIO定义 ============
+#define KEY_SPEAK     GPIO_NUM_1   // 说话录音按键
+#define KEY_DOUBAO    GPIO_NUM_4   // 切换豆包
+#define KEY_COZE      GPIO_NUM_21  // 切换Coze
+#define KEY_XIAOZHI   GPIO_NUM_47  // 切换小智
+
+// 当前选中AI枚举
+typedef enum {
+    AI_DOUBAO,
+    AI_COZE,
+    AI_XIAOZHI
+} ai_selected_t;
+ai_selected_t g_current_ai = AI_DOUBAO;
+
+// ============ I2S引脚定义 ============
+// I2S0 输出 MAX98357A 功放
+#define I2S_TX_PORT I2S_NUM_0
+#define I2S_TX_BCLK_PIN 41
+#define I2S_TX_LRCK_PIN 42
+#define I2S_TX_DATA_OUT_PIN 40
+
+// I2S1 输入 INMP441麦克风
+#define I2S_RX_PORT I2S_NUM_1
+#define I2S_RX_BCLK_PIN 10
+#define I2S_RX_LRCK_PIN 11
+#define I2S_RX_DATA_IN_PIN 12
+
+// 全局
+httpd_handle_t web_server = NULL;
+bool g_sta_connected = false;
+char g_sta_ssid[33] = {0};
+char g_sta_pass[65] = {0};
+
+// ===================== WEB网页HTML页面 =====================
+static const char* html_page =
+"<html><meta charset='UTF-8'>"
+"<head><title>ESP32语音机器人-WiFi设置</title></head>"
+"<body style='font-size:22px;margin:20px;'>"
+"<h2>🤖 ESP32 Chatbot WiFi配网</h2>"
+"<form method='post' action='/save'>"
+"<div>WiFi名称(SSID):</div>"
+"<input type='text' name='ssid' maxlength='32' style='width:90%;padding:8px;font-size:20px;'/><br><br>"
+"<div>WiFi密码(无密码留空):</div>"
+"<input type='text' name='pass' maxlength='64' style='width:90%;padding:8px;font-size:20px;'/><br><br>"
+"<input type='submit' value='保存并重启' style='padding:10px 20px;font-size:22px;'/>"
+"</form>"
+"</body></html>";
+
+// HTTP根页面回调
+esp_err_t handle_root(httpd_req_t *req)
+{
+    httpd_resp_send(req, html_page, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+// 保存WiFi配置POST接口
+esp_err_t handle_save(httpd_req_t *req)
+{
+    char buf[128];
+    size_t recv_len = httpd_req_get_url_query_len(req)+1;
+    if(recv_len > sizeof(buf)) recv_len = sizeof(buf);
+    httpd_req_get_url_query_str(req, buf, recv_len);
+
+    char ssid[33]={0}, pass[65]={0};
+    httpd_query_key_value(buf, "ssid", ssid, sizeof(ssid));
+    httpd_query_key_value(buf, "pass", pass, sizeof(pass));
+
+    //写入NVS
+    nvs_handle_t nvs_handle;
+    nvs_open(WIFI_NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
+    nvs_set_str(nvs_handle, NVS_KEY_SSID, ssid);
+    nvs_set_str(nvs_handle, NVS_KEY_PASS, pass);
+    nvs_commit(nvs_handle);
+    nvs_close(nvs_handle);
+    ESP_LOGI(TAG,"✅ 保存WiFi: SSID=%s", ssid);
+
+    httpd_resp_sendstr(req, "<meta charset='utf-8'><h1>保存成功，设备正在重启连接WiFi...</h1>");
+    vTaskDelay(pdMS_TO_TICKS(1500));
+    esp_restart();
+    return ESP_OK;
+}
+
+// 启动网页服务器
+void start_web_server(void)
+{
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    config.server_port = 80;
+    httpd_start(&web_server, &config);
+
+    httpd_uri_t uri_root = {.uri="/", .method=HTTP_GET, .handler=handle_root};
+    httpd_uri_t uri_save = {.uri="/save", .method=HTTP_POST, .handler=handle_save};
+    httpd_register_uri_handler(web_server, &uri_root);
+    httpd_register_uri_handler(web_server, &uri_save);
+    ESP_LOGI(TAG,"🌐 Web配网页面已启动，访问 http://%s", AP_IP_ADDR);
+}
+
+// AP模式初始化（配网热点）
+void wifi_ap_init(void)
+{
+    esp_netif_create_default_wifi_ap();
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    esp_wifi_init(&cfg);
+
+    wifi_config_t ap_cfg = {
+        .ap = {
+            .ssid = AP_SSID,
+            .password = AP_PASSWORD,
+            .max_connection = 4,
+            .authmode = WIFI_AUTH_OPEN
+        }
+    };
+    esp_wifi_set_mode(WIFI_MODE_APSTA);
+    esp_wifi_set_config(WIFI_IF_AP, &ap_cfg);
+    esp_wifi_start();
+    ESP_LOGI(TAG,"🔥 AP配网热点开启：%s", AP_SSID);
+    start_web_server();
+}
+
+// 从NVS读取保存的WiFi
+esp_err_t read_wifi_nvs(char *ssid, char *pass)
+{
+    nvs_handle_t nvs_handle;
+    esp_err_t ret = nvs_open(WIFI_NVS_NAMESPACE, NVS_READONLY, &nvs_handle);
+    if(ret != ESP_OK) return ret;
+
+    size_t len =32;
+    ret = nvs_get_str(nvs_handle, NVS_KEY_SSID, ssid, &len);
+    len =64;
+    nvs_get_str(nvs_handle, NVS_KEY_PASS, pass, &len);
+    nvs_close(nvs_handle);
+    return ret;
+}
+
+// WiFi事件回调
 static void wifi_event_handler(void* arg, esp_event_base_t event_base,
                                int32_t event_id, void* event_data)
 {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
+        ESP_LOGI(TAG,"开始连接WiFi");
         esp_wifi_connect();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        ESP_LOGI(TAG, "WiFi断开，重连");
+        wifi_event_sta_disconnected_t *disconn = (wifi_event_sta_disconnected_t *)event_data;
+        ESP_LOGW(TAG, "WiFi断开，原因码:%d，重试", disconn->reason);
+        g_sta_connected = false;
         esp_wifi_connect();
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
-        ESP_LOGI(TAG, "WiFi已连接，IP:" IPSTR, IP2STR(&event->ip_info.ip));
+        ESP_LOGI(TAG, "✅ WiFi连接成功，IP:" IPSTR, IP2STR(&event->ip_info.ip));
+        g_sta_connected = true;
     }
 }
 
-void wifi_init_sta(void)
+// STA模式连接WiFi
+void wifi_sta_init(const char* ssid, const char* pass)
 {
-    ESP_ERROR_CHECK(nvs_flash_init());
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
     esp_netif_create_default_wifi_sta();
-
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    esp_wifi_init(&cfg);
 
     esp_event_handler_instance_t instance_any_id;
     esp_event_handler_instance_t instance_got_ip;
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
-                                                        ESP_EVENT_ANY_ID,
-                                                        &wifi_event_handler,
-                                                        NULL,
-                                                        &instance_any_id));
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
-                                                        IP_EVENT_STA_GOT_IP,
-                                                        &wifi_event_handler,
-                                                        NULL,
-                                                        &instance_got_ip));
+    esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, &instance_any_id);
+    esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, &instance_got_ip);
 
     wifi_config_t wifi_config = {
         .sta = {
-            .ssid = WIFI_SSID,
-            .password = WIFI_PASS,
+            .ssid = "",
+            .password = ""
         },
     };
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
-    ESP_ERROR_CHECK(esp_wifi_start());
-    ESP_LOGI(TAG, "WiFi启动完成");
+    strncpy((char*)wifi_config.sta.ssid, ssid, 32);
+    strncpy((char*)wifi_config.sta.password, pass, 64);
+
+    esp_wifi_set_mode(WIFI_MODE_STA);
+    esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
+    esp_wifi_start();
 }
 
-// ========= I2S 音频输出(MAX98357A) =========
-#define I2S_PORT I2S_NUM_0
-#define I2S_BCLK_PIN 41
-#define I2S_LRCK_PIN 42
-#define I2S_DATA_OUT_PIN 40
-
-void i2s_init(void)
+// I2S 输出 MAX98357A
+void i2s_tx_init(void)
 {
-    i2s_driver_uninstall(I2S_PORT);
+    i2s_driver_uninstall(I2S_TX_PORT);
     i2s_config_t i2s_config = {
         .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
         .sample_rate = 16000,
@@ -82,29 +217,139 @@ void i2s_init(void)
         .dma_buf_count = 8,
         .dma_buf_len = 1024,
         .use_apll = false,
-        // 删掉 tx_auto_start
     };
     i2s_pin_config_t pin_cfg = {
-        .bck_io_num = I2S_BCLK_PIN,
-        .ws_io_num = I2S_LRCK_PIN,
-        .data_out_num = I2S_DATA_OUT_PIN,
+        .bck_io_num = I2S_TX_BCLK_PIN,
+        .ws_io_num = I2S_TX_LRCK_PIN,
+        .data_out_num = I2S_TX_DATA_OUT_PIN,
         .data_in_num = I2S_PIN_NO_CHANGE,
     };
-    ESP_ERROR_CHECK(i2s_driver_install(I2S_PORT, &i2s_config, 0, NULL));
-    ESP_ERROR_CHECK(i2s_set_pin(I2S_PORT, &pin_cfg));
-    ESP_ERROR_CHECK(i2s_zero_dma_buffer(I2S_PORT));
-    ESP_LOGI(TAG, "I2S初始化成功");
+    ESP_ERROR_CHECK(i2s_driver_install(I2S_TX_PORT, &i2s_config, 0, NULL));
+    ESP_ERROR_CHECK(i2s_set_pin(I2S_TX_PORT, &pin_cfg));
+    ESP_ERROR_CHECK(i2s_zero_dma_buffer(I2S_TX_PORT));
+    ESP_LOGI(TAG, "I2S TX(功放)初始化成功");
+}
+
+// I2S 输入 INMP441麦克风
+void i2s_rx_init(void)
+{
+    i2s_driver_uninstall(I2S_RX_PORT);
+    i2s_config_t i2s_config = {
+        .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
+        .sample_rate = 16000,
+        .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
+        .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
+        .communication_format = I2S_COMM_FORMAT_STAND_I2S,
+        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
+        .dma_buf_count = 8,
+        .dma_buf_len = 1024,
+        .use_apll = false,
+    };
+    i2s_pin_config_t pin_cfg = {
+        .bck_io_num = I2S_RX_BCLK_PIN,
+        .ws_io_num = I2S_RX_LRCK_PIN,
+        .data_out_num = I2S_PIN_NO_CHANGE,
+        .data_in_num = I2S_RX_DATA_IN_PIN,
+    };
+    ESP_ERROR_CHECK(i2s_driver_install(I2S_RX_PORT, &i2s_config, 0, NULL));
+    ESP_ERROR_CHECK(i2s_set_pin(I2S_RX_PORT, &pin_cfg));
+    ESP_LOGI(TAG, "I2S RX(麦克风)初始化成功");
+}
+
+// 按键批量初始化
+void key_init(void)
+{
+    gpio_config_t io_conf = {};
+    io_conf.intr_type = GPIO_INTR_DISABLE;
+    io_conf.mode = GPIO_MODE_INPUT;
+    io_conf.pin_bit_mask = (1ULL << KEY_SPEAK) | (1ULL << KEY_DOUBAO) | (1ULL << KEY_COZE) | (1ULL << KEY_XIAOZHI);
+    io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
+    io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    gpio_config(&io_conf);
+    ESP_LOGI(TAG, "4按键初始化完成");
+    ESP_LOGI(TAG, "✅ 默认选中：豆包");
+}
+
+// 打印当前AI名字
+void print_current_ai(void)
+{
+    switch(g_current_ai)
+    {
+        case AI_DOUBAO: ESP_LOGI(TAG, "👉 当前AI：豆包"); break;
+        case AI_COZE: ESP_LOGI(TAG, "👉 当前AI：Coze"); break;
+        case AI_XIAOZHI: ESP_LOGI(TAG, "👉 当前AI：小智"); break;
+    }
 }
 
 extern "C" void app_main(void)
 {
-    ESP_LOGI(TAG, "ESP32S3 Chatbot Start");
-    wifi_init_sta();
-    i2s_init();
+    ESP_LOGI(TAG, "ESP32S3 Multi-AI Chatbot Start");
+    ESP_ERROR_CHECK(nvs_flash_init());
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+    // 读取NVS保存WiFi
+    char ssid_buf[33]={0}, pass_buf[65]={0};
+    esp_err_t ret = read_wifi_nvs(ssid_buf, pass_buf);
+    if(ret == ESP_OK && strlen(ssid_buf)>0)
+    {
+        ESP_LOGI(TAG,"📖 读取已保存WiFi: %s", ssid_buf);
+        wifi_sta_init(ssid_buf, pass_buf);
+    }else{
+        ESP_LOGI(TAG,"⚠️ 无保存WiFi，开启配网AP热点");
+        wifi_ap_init();
+    }
+
+    i2s_tx_init();
+    i2s_rx_init();
+    key_init();
+
+    bool spk_last = true;
+    bool db_last = true;
+    bool cz_last = true;
+    bool xz_last = true;
 
     while(1)
     {
-        vTaskDelay(pdMS_TO_TICKS(1000));
-        ESP_LOGI(TAG, "主循环运行中...");
+        bool spk_now = gpio_get_level(KEY_SPEAK);
+        bool db_now = gpio_get_level(KEY_DOUBAO);
+        bool cz_now = gpio_get_level(KEY_COZE);
+        bool xz_now = gpio_get_level(KEY_XIAOZHI);
+
+        // ===== 说话按键 GPIO1 =====
+        if(spk_now == false && spk_last == true)
+        {
+            ESP_LOGI(TAG, "🎤 按住说话，开始录音");
+        }
+        if(spk_now == true && spk_last == false)
+        {
+            ESP_LOGI(TAG, "🛑 松开，停止录音");
+        }
+
+        // ===== 切换豆包 GPIO4 =====
+        if(db_now == false && db_last == true)
+        {
+            g_current_ai = AI_DOUBAO;
+            print_current_ai();
+        }
+        // ===== 切换Coze GPIO21 =====
+        if(cz_now == false && cz_last == true)
+        {
+            g_current_ai = AI_COZE;
+            print_current_ai();
+        }
+        // ===== 切换小智 GPIO47 =====
+        if(xz_now == false && xz_last == true)
+        {
+            g_current_ai = AI_XIAOZHI;
+            print_current_ai();
+        }
+
+        spk_last = spk_now;
+        db_last = db_now;
+        cz_last = cz_now;
+        xz_last = xz_now;
+
+        vTaskDelay(pdMS_TO_TICKS(30));
     }
 }
