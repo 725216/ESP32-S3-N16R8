@@ -14,7 +14,9 @@
 static const char *TAG = "AI_CHAT";
 
 // ========== 硬件引脚定义 ==========
-#define KEY_GPIO GPIO_NUM_1
+#define KEY_TALK        GPIO_NUM_1
+#define KEY_SWITCH_AI   GPIO_NUM_2
+
 // INMP441 麦克风 I2S
 #define I2S_MIC_BCLK   GPIO_NUM_41
 #define I2S_MIC_LRCK   GPIO_NUM_42
@@ -31,13 +33,23 @@ static const char *TAG = "AI_CHAT";
 #define RECORD_BUF_SAMPLES 1024
 static int16_t mic_buffer[RECORD_BUF_SAMPLES];
 
-// ESP32本地AP热点【无密码开放热点】
+// AP热点【无密码开放热点】
 #define AP_SSID "ESP32S3_CHATBOT"
+
+// AI代理枚举
+typedef enum {
+    AI_XIAOZHI = 0,
+    AI_COZE,
+    AI_DOUBAO,
+    AI_MAX
+} AiAgentType;
+const char* g_ai_name[] = {"小智", "Coze", "豆包"};
+AiAgentType g_current_ai = AI_DOUBAO;
 
 bool g_wifi_connected = false;
 httpd_handle_t web_server = NULL;
 
-// ========== 网页：WiFi扫描，自动识别开放WiFi ==========
+// ========== 网页：WiFi扫描配网页面 ==========
 static const char *html_page = R"HTML(
 <!DOCTYPE html>
 <html>
@@ -83,7 +95,7 @@ SSID:<br><input id="ssid" name="ssid" readonly><br>
 </html>
 )HTML";
 
-// 扫描WiFi接口，返回JSON
+// 扫描WiFi接口
 static esp_err_t wifi_scan_handler(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "application/json");
@@ -107,14 +119,12 @@ static esp_err_t wifi_scan_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-// 网页主页
 static esp_err_t get_root_handler(httpd_req_t *req)
 {
     httpd_resp_send(req, html_page, HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
 }
 
-// 接收WiFi配置，支持空密码
 static esp_err_t setwifi_handler(httpd_req_t *req)
 {
     char buf[128];
@@ -129,7 +139,7 @@ static esp_err_t setwifi_handler(httpd_req_t *req)
     nvs_handle_t nvs;
     nvs_open("wifi_cfg", NVS_READWRITE, &nvs);
     nvs_set_str(nvs, "ssid", ssid);
-    nvs_set_str(nvs, "password", pass); //无密码WiFi存入空字符串
+    nvs_set_str(nvs, "password", pass);
     nvs_commit(nvs);
     nvs_close(nvs);
 
@@ -166,6 +176,30 @@ bool load_wifi_from_nvs(char *ssid, char *pwd)
     return (ssid[0] != 0);
 }
 
+// 加载保存的AI选择
+void load_ai_select(void)
+{
+    nvs_handle_t nvs;
+    if(nvs_open("ai_cfg", NVS_READONLY, &nvs) == ESP_OK)
+    {
+        uint8_t val=0;
+        nvs_get_u8(nvs, "ai_sel", &val);
+        if(val < AI_MAX) g_current_ai = (AiAgentType)val;
+        nvs_close(nvs);
+    }
+    ESP_LOGI(TAG,"✅ 当前选中AI：%s", g_ai_name[g_current_ai]);
+}
+// 保存AI选择到NVS
+void save_ai_select(void)
+{
+    nvs_handle_t nvs;
+    nvs_open("ai_cfg", NVS_READWRITE, &nvs);
+    nvs_set_u8(nvs, "ai_sel", (uint8_t)g_current_ai);
+    nvs_commit(nvs);
+    nvs_close(nvs);
+    ESP_LOGI(TAG,"🔄 切换AI至：%s", g_ai_name[g_current_ai]);
+}
+
 static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data)
 {
     if(event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
@@ -179,7 +213,7 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
             memset(&ap_cfg,0,sizeof(ap_cfg));
             strcpy((char*)ap_cfg.ap.ssid, AP_SSID);
             ap_cfg.ap.max_connection = 1;
-            ap_cfg.ap.authmode = WIFI_AUTH_OPEN; //【开放热点，无密码】
+            ap_cfg.ap.authmode = WIFI_AUTH_OPEN;
             esp_wifi_set_mode(WIFI_MODE_AP);
             esp_wifi_set_config(WIFI_IF_AP, &ap_cfg);
             esp_wifi_start();
@@ -211,6 +245,7 @@ void wifi_ap_sta_init(void)
     esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, NULL);
     esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, NULL);
 
+    load_ai_select();
     char ssid[32]={0}, pwd[64]={0};
     if(load_wifi_from_nvs(ssid,pwd))
     {
@@ -228,7 +263,7 @@ void wifi_ap_sta_init(void)
         memset(&ap_cfg,0,sizeof(ap_cfg));
         strcpy((char*)ap_cfg.ap.ssid, AP_SSID);
         ap_cfg.ap.max_connection = 1;
-        ap_cfg.ap.authmode = WIFI_AUTH_OPEN; //开放无密码
+        ap_cfg.ap.authmode = WIFI_AUTH_OPEN;
         esp_wifi_set_mode(WIFI_MODE_AP);
         esp_wifi_set_config(WIFI_IF_AP, &ap_cfg);
         esp_wifi_start();
@@ -286,13 +321,13 @@ void i2s_spk_init()
     ESP_ERROR_CHECK(i2s_set_pin(I2S_PORT_SPK, &pin_cfg));
 }
 
-// 按键初始化
+// 两个按键初始化
 void key_init(void)
 {
     gpio_config_t io_conf = {};
     io_conf.intr_type = GPIO_INTR_DISABLE;
     io_conf.mode = GPIO_MODE_INPUT;
-    io_conf.pin_bit_mask = 1ULL << KEY_GPIO;
+    io_conf.pin_bit_mask = (1ULL << KEY_TALK) | (1ULL << KEY_SWITCH_AI);
     io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
     io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
     gpio_config(&io_conf);
@@ -312,20 +347,25 @@ extern "C" void app_main(void)
     i2s_mic_init();
     i2s_spk_init();
     key_init();
-    ESP_LOGI(TAG, "I2S + KEY Init OK，GPIO1按键按住录音");
+    ESP_LOGI(TAG, "GPIO1=对话按键, GPIO2=切换AI(小智/Coze/豆包)");
 
     bool is_recording = false;
+    bool key_switch_last = true;
+
     while(1)
     {
-        int level = gpio_get_level(KEY_GPIO);
-        if(level == 0 && !is_recording)
+        int talk_level = gpio_get_level(KEY_TALK);
+        int switch_level = gpio_get_level(KEY_SWITCH_AI);
+
+        // ===== GPIO1 对话录音按键 =====
+        if(talk_level == 0 && !is_recording)
         {
-            ESP_LOGI(TAG,"按键按下，开始录音...");
+            ESP_LOGI(TAG,"【%s】按键按下，开始录音...", g_ai_name[g_current_ai]);
             is_recording = true;
         }
-        else if(level == 1 && is_recording)
+        else if(talk_level == 1 && is_recording)
         {
-            ESP_LOGI(TAG,"松开按键，停止录音");
+            ESP_LOGI(TAG,"【%s】松开按键，停止录音，准备发送请求", g_ai_name[g_current_ai]);
             is_recording = false;
         }
 
@@ -333,6 +373,19 @@ extern "C" void app_main(void)
         {
             size_t samples = read_mic_pcm(mic_buffer, RECORD_BUF_SAMPLES);
         }
+
+        // ===== GPIO2 切换AI（边沿检测，防抖）=====
+        if(switch_level == 0 && key_switch_last)
+        {
+            vTaskDelay(pdMS_TO_TICKS(20)); //防抖
+            if(gpio_get_level(KEY_SWITCH_AI)==0)
+            {
+                g_current_ai = (AiAgentType)((g_current_ai + 1) % AI_MAX);
+                save_ai_select();
+            }
+        }
+        key_switch_last = (switch_level == 1);
+
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
