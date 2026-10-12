@@ -82,7 +82,7 @@ void i2s_init(void)
         .dma_buf_count = 8,
         .dma_buf_len = 1024,
         .use_apll = false,
-        .tx_auto_start = true,
+        // 删掉 tx_auto_start
     };
     i2s_pin_config_t pin_cfg = {
         .bck_io_num = I2S_BCLK_PIN,
