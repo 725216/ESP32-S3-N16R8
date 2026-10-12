@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <inttypes.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -26,31 +27,31 @@ static const char *TAG = "CHATBOT";
 #define AP_IP_ADDR "192.168.4.1"
 
 // ============ 4个按键GPIO定义 ============
-#define KEY_SPEAK     GPIO_NUM_1   // 说话录音按键
+#define KEY_SPEAK     GPIO_NUM_1   // 说话按键
 #define KEY_DOUBAO    GPIO_NUM_4   // 切换豆包
 #define KEY_COZE      GPIO_NUM_21  // 切换Coze
 #define KEY_XIAOZHI   GPIO_NUM_47  // 切换小智
 
-// 当前选中AI枚举
+// 当前AI代理枚举
 typedef enum {
     AI_DOUBAO,
     AI_COZE,
     AI_XIAOZHI
-} ai_selected_t;
-ai_selected_t g_current_ai = AI_DOUBAO;
+} ai_agent_t;
+ai_agent_t g_current_ai = AI_DOUBAO;
 
 // ============ I2S引脚定义 ============
-// I2S0 输出 MAX98357A 功放
+// I2S0: MAX98357A 功放输出
 #define I2S_TX_PORT I2S_NUM_0
-#define I2S_TX_BCLK_PIN 41
-#define I2S_TX_LRCK_PIN 42
-#define I2S_TX_DATA_OUT_PIN 40
+#define I2S_TX_BCLK  42
+#define I2S_TX_LRCK  41
+#define I2S_TX_DOUT  40
 
-// I2S1 输入 INMP441麦克风
+// I2S1: INMP441 麦克风输入
 #define I2S_RX_PORT I2S_NUM_1
-#define I2S_RX_BCLK_PIN 10
-#define I2S_RX_LRCK_PIN 11
-#define I2S_RX_DATA_IN_PIN 12
+#define I2S_RX_BCLK  38
+#define I2S_RX_LRCK  39
+#define I2S_RX_DIN   48
 
 // 全局状态
 httpd_handle_t web_server = NULL;
@@ -162,7 +163,7 @@ esp_err_t read_wifi_nvs(char *ssid, char *pass)
     return ret;
 }
 
-// WiFi事件回调
+// WiFi事件回调【修复格式打印】
 static void wifi_event_handler(void* arg, esp_event_base_t event_base,
                                int32_t event_id, void* event_data)
 {
@@ -171,7 +172,8 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
         esp_wifi_connect();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_event_sta_disconnected_t *disconn = (wifi_event_sta_disconnected_t *)event_data;
-        ESP_LOGW(TAG, "WiFi断开，原因码:%d，重试次数:%d", disconn->reason, g_wifi_retry_count);
+        // ========= 修复：%d 改成 %" PRIu32 =========
+        ESP_LOGW(TAG, "WiFi断开，原因码:%d，重试次数:%" PRIu32, disconn->reason, g_wifi_retry_count);
         g_sta_connected = false;
         g_wifi_retry_count ++;
 
@@ -216,7 +218,7 @@ void wifi_sta_init(const char* ssid, const char* pass)
     esp_wifi_start();
 }
 
-// I2S 输出 MAX98357A
+// I2S 输出 MAX98357A TTS功放
 void i2s_tx_init(void)
 {
     i2s_driver_uninstall(I2S_TX_PORT);
@@ -230,16 +232,17 @@ void i2s_tx_init(void)
         .dma_buf_count = 8,
         .dma_buf_len = 1024,
         .use_apll = false,
+        .tx_auto_start = false
     };
-    i2s_pin_config_t pin_cfg = {
-        .bck_io_num = I2S_TX_BCLK_PIN,
-        .ws_io_num = I2S_TX_LRCK_PIN,
-        .data_out_num = I2S_TX_DATA_OUT_PIN,
-        .data_in_num = I2S_PIN_NO_CHANGE,
+    i2s_pin_config_t pins = {
+        .bck_io_num = I2S_TX_BCLK,
+        .ws_io_num = I2S_TX_LRCK,
+        .data_out_num = I2S_TX_DOUT,
+        .data_in_num = I2S_PIN_NO_CHANGE
     };
-    ESP_ERROR_CHECK(i2s_driver_install(I2S_TX_PORT, &i2s_config, 0, NULL));
-    ESP_ERROR_CHECK(i2s_set_pin(I2S_TX_PORT, &pin_cfg));
-    ESP_ERROR_CHECK(i2s_zero_dma_buffer(I2S_TX_PORT));
+    i2s_driver_install(I2S_TX_PORT, &i2s_config, 0, NULL);
+    i2s_set_pin(I2S_TX_PORT, &pins);
+    i2s_zero_dma_buffer(I2S_TX_PORT);
     ESP_LOGI(TAG, "I2S TX(功放)初始化成功");
 }
 
@@ -256,20 +259,20 @@ void i2s_rx_init(void)
         .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
         .dma_buf_count = 8,
         .dma_buf_len = 1024,
-        .use_apll = false,
+        .use_apll = false
     };
-    i2s_pin_config_t pin_cfg = {
-        .bck_io_num = I2S_RX_BCLK_PIN,
-        .ws_io_num = I2S_RX_LRCK_PIN,
+    i2s_pin_config_t pins = {
+        .bck_io_num = I2S_RX_BCLK,
+        .ws_io_num = I2S_RX_LRCK,
         .data_out_num = I2S_PIN_NO_CHANGE,
-        .data_in_num = I2S_RX_DATA_IN_PIN,
+        .data_in_num = I2S_RX_DIN
     };
-    ESP_ERROR_CHECK(i2s_driver_install(I2S_RX_PORT, &i2s_config, 0, NULL));
-    ESP_ERROR_CHECK(i2s_set_pin(I2S_RX_PORT, &pin_cfg));
+    i2s_driver_install(I2S_RX_PORT, &i2s_config, 0, NULL);
+    i2s_set_pin(I2S_RX_PORT, &pins);
     ESP_LOGI(TAG, "I2S RX(麦克风)初始化成功");
 }
 
-// 按键批量初始化
+// 按键初始化
 void key_init(void)
 {
     gpio_config_t io_conf = {};
@@ -291,6 +294,7 @@ void print_current_ai(void)
         case AI_DOUBAO: ESP_LOGI(TAG, "👉 当前AI：豆包"); break;
         case AI_COZE: ESP_LOGI(TAG, "👉 当前AI：Coze"); break;
         case AI_XIAOZHI: ESP_LOGI(TAG, "👉 当前AI：小智"); break;
+        default: break;
     }
 }
 
@@ -317,51 +321,51 @@ extern "C" void app_main(void)
     i2s_rx_init();
     key_init();
 
-    bool spk_last = true;
-    bool db_last = true;
-    bool cz_last = true;
-    bool xz_last = true;
+    bool key_spk_last = true;
+    bool key_db_last = true;
+    bool key_cz_last = true;
+    bool key_xz_last = true;
 
     while(1)
     {
-        bool spk_now = gpio_get_level(KEY_SPEAK);
-        bool db_now = gpio_get_level(KEY_DOUBAO);
-        bool cz_now = gpio_get_level(KEY_COZE);
-        bool xz_now = gpio_get_level(KEY_XIAOZHI);
+        bool key_spk_now = gpio_get_level(KEY_SPEAK);
+        bool key_db_now = gpio_get_level(KEY_DOUBAO);
+        bool key_cz_now = gpio_get_level(KEY_COZE);
+        bool key_xz_now = gpio_get_level(KEY_XIAOZHI);
 
-        // ===== 说话按键 GPIO1 =====
-        if(spk_now == false && spk_last == true)
+        // 说话按键下降沿检测
+        if(key_spk_now == 0 && key_spk_last == 1)
         {
-            ESP_LOGI(TAG, "🎤 按住说话，开始录音");
+            ESP_LOGI(TAG, "🎤 按下说话按键，开始录音");
         }
-        if(spk_now == true && spk_last == false)
+        if(key_spk_now == 1 && key_spk_last == 0)
         {
-            ESP_LOGI(TAG, "🛑 松开，停止录音");
+            ESP_LOGI(TAG, "🎤 松开说话按键，结束录音");
         }
 
-        // ===== 切换豆包 GPIO4 =====
-        if(db_now == false && db_last == true)
+        // 切换豆包
+        if(key_db_now == 0 && key_db_last == 1)
         {
             g_current_ai = AI_DOUBAO;
             print_current_ai();
         }
-        // ===== 切换Coze GPIO21 =====
-        if(cz_now == false && cz_last == true)
+        // 切换Coze
+        if(key_cz_now == 0 && key_cz_last == 1)
         {
             g_current_ai = AI_COZE;
             print_current_ai();
         }
-        // ===== 切换小智 GPIO47 =====
-        if(xz_now == false && xz_last == true)
+        // 切换小智
+        if(key_xz_now == 0 && key_xz_last == 1)
         {
             g_current_ai = AI_XIAOZHI;
             print_current_ai();
         }
 
-        spk_last = spk_now;
-        db_last = db_now;
-        cz_last = cz_now;
-        xz_last = xz_now;
+        key_spk_last = key_spk_now;
+        key_db_last = key_db_now;
+        key_cz_last = key_cz_now;
+        key_xz_last = key_xz_now;
 
         vTaskDelay(pdMS_TO_TICKS(30));
     }
