@@ -9,7 +9,7 @@
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "esp_log.h"
-#include "driver/i2s.h"
+#include "driver/i2s_std.h"
 #include "driver/gpio.h"
 #include "esp_http_server.h"
 #include "esp_netif.h"
@@ -132,12 +132,17 @@ void wifi_ap_init(void)
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     esp_wifi_init(&cfg);
 
+    // ========== 修复：wifi_ap_config_t 成员顺序和结构体定义保持一致 ==========
     wifi_config_t ap_cfg = {
         .ap = {
             .ssid = AP_SSID,
             .password = AP_PASSWORD,
+            .ssid_len = 0,
+            .channel = 1,
+            .authmode = WIFI_AUTH_OPEN,
+            .ssid_hidden = 0,
             .max_connection = 4,
-            .authmode = WIFI_AUTH_OPEN
+            .beacon_interval = 100
         }
     };
     esp_wifi_set_mode(WIFI_MODE_AP);
@@ -172,7 +177,6 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
         esp_wifi_connect();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_event_sta_disconnected_t *disconn = (wifi_event_sta_disconnected_t *)event_data;
-        // ========= 修复：%d 改成 %" PRIu32 =========
         ESP_LOGW(TAG, "WiFi断开，原因码:%d，重试次数:%" PRIu32, disconn->reason, g_wifi_retry_count);
         g_sta_connected = false;
         g_wifi_retry_count ++;
@@ -221,54 +225,46 @@ void wifi_sta_init(const char* ssid, const char* pass)
 // I2S 输出 MAX98357A TTS功放
 void i2s_tx_init(void)
 {
-    i2s_driver_uninstall(I2S_TX_PORT);
-    i2s_config_t i2s_config = {
-        .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
-        .sample_rate = 16000,
-        .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
-        .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
-        .communication_format = I2S_COMM_FORMAT_STAND_I2S,
-        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
-        .dma_buf_count = 8,
-        .dma_buf_len = 1024,
-        .use_apll = false,
-        .tx_auto_start = false
+    i2s_std_config_t i2s_cfg = {
+        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(16000),
+        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO),
+        .gpio_cfg = {
+            .bclk = I2S_TX_BCLK,
+            .ws = I2S_TX_LRCK,
+            .dout = I2S_TX_DOUT,
+            .din = I2S_GPIO_UNUSED,
+            .invert_flags = {
+                .bclk_inv = false,
+                .ws_inv = false,
+            },
+        },
     };
-    i2s_pin_config_t pins = {
-        .bck_io_num = I2S_TX_BCLK,
-        .ws_io_num = I2S_TX_LRCK,
-        .data_out_num = I2S_TX_DOUT,
-        .data_in_num = I2S_PIN_NO_CHANGE
-    };
-    i2s_driver_install(I2S_TX_PORT, &i2s_config, 0, NULL);
-    i2s_set_pin(I2S_TX_PORT, &pins);
-    i2s_zero_dma_buffer(I2S_TX_PORT);
+    i2s_channel_handle_t tx_handle;
+    ESP_ERROR_CHECK(i2s_new_channel(&i2s_cfg, &tx_handle, NULL));
+    ESP_ERROR_CHECK(i2s_channel_enable(tx_handle));
     ESP_LOGI(TAG, "I2S TX(功放)初始化成功");
 }
 
 // I2S 输入 INMP441麦克风
 void i2s_rx_init(void)
 {
-    i2s_driver_uninstall(I2S_RX_PORT);
-    i2s_config_t i2s_config = {
-        .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
-        .sample_rate = 16000,
-        .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
-        .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
-        .communication_format = I2S_COMM_FORMAT_STAND_I2S,
-        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
-        .dma_buf_count = 8,
-        .dma_buf_len = 1024,
-        .use_apll = false
+    i2s_std_config_t i2s_cfg = {
+        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(16000),
+        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO),
+        .gpio_cfg = {
+            .bclk = I2S_RX_BCLK,
+            .ws = I2S_RX_LRCK,
+            .dout = I2S_GPIO_UNUSED,
+            .din = I2S_RX_DIN,
+            .invert_flags = {
+                .bclk_inv = false,
+                .ws_inv = false,
+            },
+        },
     };
-    i2s_pin_config_t pins = {
-        .bck_io_num = I2S_RX_BCLK,
-        .ws_io_num = I2S_RX_LRCK,
-        .data_out_num = I2S_PIN_NO_CHANGE,
-        .data_in_num = I2S_RX_DIN
-    };
-    i2s_driver_install(I2S_RX_PORT, &i2s_config, 0, NULL);
-    i2s_set_pin(I2S_RX_PORT, &pins);
+    i2s_channel_handle_t rx_handle;
+    ESP_ERROR_CHECK(i2s_new_channel(&i2s_cfg, NULL, &rx_handle));
+    ESP_ERROR_CHECK(i2s_channel_enable(rx_handle));
     ESP_LOGI(TAG, "I2S RX(麦克风)初始化成功");
 }
 
