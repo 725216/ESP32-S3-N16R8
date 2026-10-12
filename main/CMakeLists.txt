@@ -1,3 +1,3 @@
 idf_component_register(SRCS "app_main.cpp"
                     INCLUDE_DIRS "."
-                    PRIV_REQUIRES nvs_flash esp_wifi esp_event i2s driver gpio)
+                    PRIV_REQUIRES nvs_flash esp_wifi esp_event driver)
