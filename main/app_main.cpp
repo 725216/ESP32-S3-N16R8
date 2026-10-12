@@ -40,20 +40,18 @@ typedef enum {
 } ai_agent_t;
 ai_agent_t g_current_ai = AI_DOUBAO;
 
-// ============ I2S引脚定义 ============
+// ============ I2S引脚定义（全部用GPIO_NUM_xx 修复类型错误） ============
 // I2S0: MAX98357A 功放输出
-#define I2S_TX_PORT I2S_NUM_0
-#define I2S_TX_BCLK  42
-#define I2S_TX_LRCK  41
-#define I2S_TX_DOUT  40
+#define I2S_TX_BCLK  GPIO_NUM_42
+#define I2S_TX_LRCK  GPIO_NUM_41
+#define I2S_TX_DOUT  GPIO_NUM_40
 
 // I2S1: INMP441 麦克风输入
-#define I2S_RX_PORT I2S_NUM_1
-#define I2S_RX_BCLK  38
-#define I2S_RX_LRCK  39
-#define I2S_RX_DIN   48
+#define I2S_RX_BCLK  GPIO_NUM_38
+#define I2S_RX_LRCK  GPIO_NUM_39
+#define I2S_RX_DIN   GPIO_NUM_48
 
-// 全局句柄（放到全局，方便后面录音/播放任务调用）
+// 全局句柄
 i2s_chan_handle_t tx_handle = NULL;
 i2s_chan_handle_t rx_handle = NULL;
 
@@ -62,7 +60,7 @@ httpd_handle_t web_server = NULL;
 bool g_sta_connected = false;
 bool g_ap_mode = false;
 uint32_t g_wifi_retry_count = 0;
-#define WIFI_MAX_RETRY 8  // 重试8次失败后切AP配网
+#define WIFI_MAX_RETRY 8
 
 // ===================== WEB网页HTML页面 =====================
 static const char* html_page =
@@ -98,7 +96,6 @@ esp_err_t handle_save(httpd_req_t *req)
     httpd_query_key_value(buf, "ssid", ssid, sizeof(ssid));
     httpd_query_key_value(buf, "pass", pass, sizeof(pass));
 
-    //写入NVS
     nvs_handle_t nvs_handle;
     nvs_open(WIFI_NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
     nvs_set_str(nvs_handle, NVS_KEY_SSID, ssid);
@@ -228,7 +225,12 @@ void wifi_sta_init(const char* ssid, const char* pass)
 // I2S 输出 MAX98357A TTS功放
 void i2s_tx_init(void)
 {
-    i2s_std_config_t i2s_cfg = {
+    // 第一步：通道基础配置
+    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_TX);
+    ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, &tx_handle, NULL));
+
+    // 第二步：标准模式参数
+    i2s_std_config_t std_cfg = {
         .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(16000),
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO),
         .gpio_cfg = {
@@ -242,7 +244,7 @@ void i2s_tx_init(void)
             },
         },
     };
-    ESP_ERROR_CHECK(i2s_new_channel(&i2s_cfg, &tx_handle, NULL));
+    ESP_ERROR_CHECK(i2s_channel_init_std_mode(tx_handle, &std_cfg));
     ESP_ERROR_CHECK(i2s_channel_enable(tx_handle));
     ESP_LOGI(TAG, "I2S TX(功放)初始化成功");
 }
@@ -250,7 +252,12 @@ void i2s_tx_init(void)
 // I2S 输入 INMP441麦克风
 void i2s_rx_init(void)
 {
-    i2s_std_config_t i2s_cfg = {
+    // 第一步：通道基础配置
+    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_1, I2S_ROLE_RX);
+    ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, NULL, &rx_handle));
+
+    // 第二步：标准模式参数
+    i2s_std_config_t std_cfg = {
         .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(16000),
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO),
         .gpio_cfg = {
@@ -264,7 +271,7 @@ void i2s_rx_init(void)
             },
         },
     };
-    ESP_ERROR_CHECK(i2s_new_channel(&i2s_cfg, NULL, &rx_handle));
+    ESP_ERROR_CHECK(i2s_channel_init_std_mode(rx_handle, &std_cfg));
     ESP_ERROR_CHECK(i2s_channel_enable(rx_handle));
     ESP_LOGI(TAG, "I2S RX(麦克风)初始化成功");
 }
@@ -302,7 +309,6 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    // 读取NVS保存WiFi
     char ssid_buf[33]={0}, pass_buf[65]={0};
     esp_err_t ret = read_wifi_nvs(ssid_buf, pass_buf);
     if(ret == ESP_OK && strlen(ssid_buf)>0)
@@ -330,7 +336,6 @@ extern "C" void app_main(void)
         bool key_cz_now = gpio_get_level(KEY_COZE);
         bool key_xz_now = gpio_get_level(KEY_XIAOZHI);
 
-        // 说话按键下降沿检测
         if(key_spk_now == 0 && key_spk_last == 1)
         {
             ESP_LOGI(TAG, "🎤 按下说话按键，开始录音");
@@ -340,19 +345,16 @@ extern "C" void app_main(void)
             ESP_LOGI(TAG, "🎤 松开说话按键，结束录音");
         }
 
-        // 切换豆包
         if(key_db_now == 0 && key_db_last == 1)
         {
             g_current_ai = AI_DOUBAO;
             print_current_ai();
         }
-        // 切换Coze
         if(key_cz_now == 0 && key_cz_last == 1)
         {
             g_current_ai = AI_COZE;
             print_current_ai();
         }
-        // 切换小智
         if(key_xz_now == 0 && key_xz_last == 1)
         {
             g_current_ai = AI_XIAOZHI;
