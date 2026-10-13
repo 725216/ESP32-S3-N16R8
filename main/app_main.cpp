@@ -21,6 +21,7 @@
 #define SAMPLE_RATE 16000
 #define SAMPLE_BITS I2S_BITS_PER_SAMPLE_16BIT
 #define PCM_BLOCK_SIZE 512
+#define WIFI_RETRY_MAX 5
 
 // ===================== 硬件引脚定义 =====================
 #define MIC_BCLK_PIN    GPIO_NUM_8
@@ -51,6 +52,8 @@ static SemaphoreHandle_t wifi_scan_sem = nullptr;
 static wifi_ap_record_t scan_list[16];
 static uint16_t scan_count = 0;
 static const char *TAG = "AI_CHAT_S3";
+static int g_wifi_retry_cnt = 0;
+static bool g_ap_started = false;
 
 // I2S句柄
 i2s_std_config_t mic_i2s_cfg;
@@ -233,12 +236,21 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
         esp_wifi_connect();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         g_wifi_connected = false;
-        ESP_LOGW(TAG, "WiFi断开，重连");
+        g_wifi_retry_cnt++;
+        ESP_LOGW(TAG, "WiFi断开，重试 %d/%d", g_wifi_retry_cnt, WIFI_RETRY_MAX);
+        if(g_wifi_retry_cnt >= WIFI_RETRY_MAX)
+        {
+            ESP_LOGW(TAG,"WiFi多次连接失败，切换AP热点配网");
+            esp_wifi_stop();
+            wifi_start_ap();
+            return;
+        }
         esp_wifi_connect();
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
         ESP_LOGI(TAG, "WiFi已连接,ip:" IPSTR, IP2STR(&event->ip_info.ip));
         g_wifi_connected = true;
+        g_wifi_retry_cnt = 0;
         if(g_ai_mode == AI_XIAOZHI)
         {
             xiaozhi_mcp_start();
@@ -248,6 +260,8 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
 
 void wifi_init_sta(const char* ssid, const char* pwd)
 {
+    g_ap_started = false;
+    g_wifi_retry_cnt = 0;
     esp_netif_create_default_wifi_sta();
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
@@ -269,7 +283,8 @@ void wifi_init_sta(const char* ssid, const char* pwd)
 
 void wifi_start_ap(void)
 {
-    if(g_web_server != nullptr) return;
+    if(g_ap_started) return;
+    g_ap_started = true;
     esp_netif_create_default_wifi_ap();
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
@@ -384,7 +399,7 @@ static void key_task(void* arg)
                     case KEY_TALK:
                         ESP_LOGI(TAG, "对话按键按下");
                         if(!g_wifi_connected) {
-                            ESP_LOGW(TAG, "无WiFi，进入AP配网模式");
+                            ESP_LOGW(TAG, "无WiFi，开启AP配网");
                             wifi_start_ap();
                         } else {
                             audio_start_capture_and_upload();
