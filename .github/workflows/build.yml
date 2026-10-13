@@ -1,33 +1,22 @@
-name: Build ESP32S3 AI Chat
+name: Build ESP32S3
 on:
   push:
-    branches: [ main ]
-  workflow_dispatch:  # ✅ 支持手动点按钮触发编译
+  pull_request:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      IDF_TARGET: esp32s3
+      COZE_TOKEN: ${{ secrets.COZE_TOKEN }}
+      DOUBAO_APIKEY: ${{ secrets.DOUBAO_APIKEY }}
     steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
-
-      - name: ESP-IDF Build
-        uses: espressif/esp-idf-ci-action@v1
+      - uses: actions/checkout@v4
+      - name: Setup ESP-IDF
+        uses: espressif/setup-idf@v5
         with:
-          esp_idf_version: v5.3.1
-          target: esp32s3
-          path: '.'
-          command: |
-            idf.py set-target esp32s3
-            idf.py build
-            idf.py merge-bin
-
-      - name: Upload firmware
-        uses: actions/upload-artifact@v4
-        with:
-          name: firmware
-          path: |
-            build/bootloader/bootloader.bin
-            build/partition_table/partition-table.bin
-            build/esp32s3_ai_chat.bin
-            build/merged-binary.bin
+          idf-version: v5.3.1
+      - name: Build
+        run: |
+          idf.py set-target esp32s3
+          idf.py build
