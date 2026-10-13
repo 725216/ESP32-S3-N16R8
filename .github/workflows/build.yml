@@ -1,33 +1,31 @@
-name: Build ESP32S3 AI Chat
+name: Build ESP32S3 Firmware
 on:
   push:
+    branches: [ main ]
   pull_request:
+    branches: [ main ]
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      COZE_TOKEN: ${{ secrets.COZE_TOKEN }}
-      DOUBAO_APIKEY: ${{ secrets.DOUBAO_APIKEY }}
     steps:
-      - name: Checkout code
+      - name: Checkout source
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
-      - name: Build ESP-IDF Project
-        uses: espressif/esp-idf-ci-action@v1
+      - name: Setup ESP-IDF
+        uses: espressif/setup-esp-idf@v1
         with:
-          esp_idf_version: v5.3.1
-          target: esp32s3
-          path: '.'
-          env: |
-            IDF_GITHUB_ASSETS=dl.espressif.cn/github_assets
+          esp-idf-version: v5.3.1
+          export-path: true
 
-      - name: Upload firmware artifacts
+      - name: Build firmware (no merge bin)
+        run: idf.py build --no-merge-bin
+
+      - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
-          name: firmware-bin
+          name: esp32s3-firmware
           path: |
-            build/*.bin
-            build/merged-binary.bin
+            build/bootloader/bootloader.bin
+            build/partition_table/partition-table.bin
+            build/app.bin
