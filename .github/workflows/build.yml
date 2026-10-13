@@ -21,11 +21,9 @@ jobs:
           esp_idf_version: v5.3.1
           target: esp32s3
           path: '.'
-          # 国内加速，拉取组件更快，防止超时
           env: |
             IDF_GITHUB_ASSETS=dl.espressif.cn/github_assets
 
-      # 编译成功后，上传固件bin作为制品
       - name: Upload firmware artifacts
         uses: actions/upload-artifact@v4
         with:
