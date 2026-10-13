@@ -2,7 +2,7 @@
 #include <cstring>
 #include <inttypes.h>
 #include "driver/gpio.h"
-#include "driver/i2s.h"
+#include "driver/i2s_std.h"
 #include "nvs_flash.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
@@ -137,7 +137,8 @@ void wifi_init_sta(const char* ssid, const char* pwd)
     esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, nullptr, nullptr);
     esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, nullptr, nullptr);
 
-    wifi_config_t wifi_config = {};
+    wifi_config_t wifi_config;
+    memset(&wifi_config,0,sizeof(wifi_config_t));
     strcpy((char*)wifi_config.sta.ssid, ssid);
     strcpy((char*)wifi_config.sta.password, pwd);
 
@@ -146,34 +147,28 @@ void wifi_init_sta(const char* ssid, const char* pwd)
     ESP_ERROR_CHECK(esp_wifi_start());
 }
 
-// AP热点（无密码，网页配网）【完整初始化所有AP字段，消除警告】
+// AP热点（无密码，网页配网）【memset清零，逐个赋值，规避结构体顺序报错】
 void wifi_start_ap(void)
 {
     esp_netif_create_default_wifi_ap();
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
-    wifi_config_t ap_cfg = {
-        .ap = {
-            .ssid = "ESP32S3-AI",
-            .ssid_len = sizeof("ESP32S3-AI") -1,
-            .password = "",
-            .channel = 1,
-            .ssid_hidden = 0,
-            .max_connection = 4,
-            .authmode = WIFI_AUTH_OPEN,
-            .beacon_interval = 100,
-            .dtim_period = 1,
-            .csa_count = 0,
-            .pairwise_cipher = WIFI_CIPHER_TYPE_NONE,
-            .ftm_responder = false,
-            .pmf_cfg = {
-                .capable = false,
-                .required = false,
-            },
-            .sae_pwe_h2e = WPA3_SAE_PWE_UNSPECIFIED,
-        }
-    };
+    wifi_config_t ap_cfg;
+    memset(&ap_cfg, 0, sizeof(wifi_config_t));
+
+    strcpy((char *)ap_cfg.ap.ssid, "ESP32S3-AI");
+    ap_cfg.ap.ssid_len = strlen("ESP32S3-AI");
+    ap_cfg.ap.channel = 1;
+    ap_cfg.ap.max_connection = 4;
+    ap_cfg.ap.authmode = WIFI_AUTH_OPEN;
+    ap_cfg.ap.beacon_interval = 100;
+    ap_cfg.ap.dtim_period = 1;
+    ap_cfg.ap.pairwise_cipher = WIFI_CIPHER_TYPE_NONE;
+    ap_cfg.ap.ftm_responder = false;
+    ap_cfg.ap.pmf_cfg.capable = false;
+    ap_cfg.ap.pmf_cfg.required = false;
+    ap_cfg.ap.sae_pwe_h2e = WPA3_SAE_PWE_UNSPECIFIED;
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_cfg));
@@ -204,7 +199,8 @@ httpd_handle_t start_webserver(httpd_handle_t *server)
 // ===================== 初始化按键GPIO =====================
 void gpio_key_init(void)
 {
-    gpio_config_t io_conf = {};
+    gpio_config_t io_conf;
+    memset(&io_conf,0,sizeof(gpio_config_t));
     io_conf.intr_type = GPIO_INTR_NEGEDGE;
     io_conf.mode = GPIO_MODE_INPUT;
     io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
