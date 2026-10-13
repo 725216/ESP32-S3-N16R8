@@ -7,10 +7,9 @@
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_log.h"
-#include "esp_xiaozhi.h"
 
 #define GPIO_BTN_TALK     GPIO_NUM_1   //对话按键
-#define GPIO_BTN_MODE1    GPIO_NUM_2   //小智
+#define GPIO_BTN_MODE1    GPIO_NUM_2   //小智（预留，暂不启用）
 #define GPIO_BTN_MODE2    GPIO_NUM_3   //Coze
 #define GPIO_BTN_MODE3    GPIO_NUM_4   //豆包
 
@@ -20,7 +19,7 @@ typedef enum {
     AI_DOUBAO
 } AiAgentType;
 
-static AiAgentType current_agent = AI_XIAOZHI;
+static AiAgentType current_agent = AI_COZE;
 static const char *TAG = "AI_CHAT";
 
 //按键初始化
@@ -36,17 +35,17 @@ static void gpio_btn_init(void)
     gpio_config(&io_conf);
 }
 
-//WiFi AP配网，无密码热点，网页配网
+//WiFi AP无密码热点网页配网
 static void wifi_ap_provision_start(void)
 {
-    // 你的AP配网代码，WiFi断网自动进入此函数
+    //这里后续补AP配网代码
 }
 
 static void btn_task(void *arg)
 {
     for(;;){
         if(gpio_get_level(GPIO_BTN_MODE1) == 0){
-            ESP_LOGI(TAG,"切换至 小智");
+            ESP_LOGI(TAG,"切换至 小智（暂未启用）");
             current_agent = AI_XIAOZHI;
             vTaskDelay(pdMS_TO_TICKS(300));
         }
@@ -64,7 +63,7 @@ static void btn_task(void *arg)
             ESP_LOGI(TAG,"开始对话");
             switch(current_agent){
                 case AI_XIAOZHI:
-                    esp_xiaozhi_start_listen();
+                    ESP_LOGW(TAG,"小智组件未编译，跳过");
                     break;
                 case AI_COZE:
                     // start_pcm_upload_coze();
@@ -89,10 +88,6 @@ void app_main(void)
 
     //WiFi检测，无WiFi自动开启无密码AP配网
     wifi_ap_provision_start();
-
-    //小智初始化，上电输出6位验证码，网页绑定
-    esp_xiaozhi_config_t xz_cfg = ESP_XIAOZHI_DEFAULT_CONFIG();
-    esp_xiaozhi_init(&xz_cfg);
 
     xTaskCreate(btn_task,"btn_task",4096,NULL,5,NULL);
 }
