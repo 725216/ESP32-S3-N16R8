@@ -80,10 +80,8 @@ static void key_task(void* arg)
                         ESP_LOGI(TAG, "开始对话");
                         if(!g_wifi_connected) {
                             ESP_LOGW(TAG, "无WiFi，进入AP配网模式");
-                            // 启动热点配网
                             wifi_start_ap();
                         } else {
-                            // 采集PCM并上传API，TTS播放
                             audio_start_capture_and_upload();
                         }
                         break;
@@ -163,30 +161,23 @@ void wifi_start_ap(void)
     ESP_ERROR_CHECK(esp_wifi_start());
     ESP_LOGI(TAG, "AP热点开启，名称ESP32S3-AI，无密码");
 
-    // 启动配网网页服务器
     httpd_handle_t server = nullptr;
     start_webserver(&server);
 }
 
-// ===================== I2S音频采集与播放 =====================
+// ===================== I2S音频采集与上传占位函数 =====================
 void audio_start_capture_and_upload(void)
 {
     ESP_LOGI(TAG, "I2S麦克风采集PCM，上传云端API，TTS返回播放");
-    // 此处：I2S读取INMP441 PCM
-    // HTTP POST上传PCM到对应AI语音API（豆包/coze/小智，根据g_ai_mode选择）
-    // 接收TTS音频流，I2S输出到MAX98357A
 }
 
-// ===================== Web配网网页服务（扫描WiFi+提交ssid/pass） =====================
+// ===================== Web配网网页服务 =====================
 httpd_handle_t start_webserver(httpd_handle_t *server)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable = true;
     if (httpd_start(server, &config) == ESP_OK) {
         ESP_LOGI(TAG, "Web配网服务启动");
-        //注册路由：扫描WiFi页面，提交WiFi表单
-        //httpd_register_uri_handler(*server, &wifi_scan_handler);
-        //httpd_register_uri_handler(*server, &wifi_save_handler);
     }
     return *server;
 }
@@ -213,12 +204,11 @@ void gpio_key_init(void)
     gpio_install_isr_service(0);
 }
 
-// ===================== 程序入口 【重点extern "C"】 =====================
+// ===================== 程序入口 =====================
 extern "C" void app_main(void)
 {
     ESP_LOGI(TAG, "ESP32S3 AI语音助手启动");
 
-    //NVS初始化
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -229,10 +219,5 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    //初始化按键
     gpio_key_init();
-
-    // 尝试读取NVS保存的WiFi信息并连接STA
-    // 这里可增加NVS读取SSID/PASSWORD逻辑
-    // wifi_init_sta(saved_ssid, saved_pwd);
 }
