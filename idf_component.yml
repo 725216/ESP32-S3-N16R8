@@ -1,4 +1,3 @@
 dependencies:
-  espressif/esp-xiaozhi: "^1.0.0"
-  espressif/esp_wifi: "*"
   espressif/http_client: "*"
+  espressif/nvs_flash: "*"
