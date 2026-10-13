@@ -11,15 +11,16 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
-
-      - name: Setup ESP-IDF
-        uses: espressif/setup-esp-idf@v1
         with:
-          esp-idf-version: v5.3.1
-          export-path: true
+          submodules: 'recursive'
 
-      - name: Build firmware (no merge bin)
-        run: idf.py build --no-merge-bin
+      - name: Build ESP-IDF firmware
+        uses: espressif/esp-idf-ci-action@v1.1.0
+        with:
+          esp_idf_version: v5.3.1
+          target: esp32s3
+          command: |
+            idf.py build --no-merge-bin
 
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
