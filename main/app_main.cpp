@@ -18,9 +18,9 @@
 #include "nvs.h"
 
 #define SAMPLE_RATE 16000
-#define SAMPLE_BITS I2S_BITS_PER_SAMPLE_16BIT
 #define PCM_BLOCK_SIZE 512
 #define WIFI_RETRY_MAX 5
+#define SAMPLE_BIT_WIDTH I2S_DATA_BIT_WIDTH_16BIT
 
 // ===================== 硬件引脚定义 =====================
 #define MIC_BCLK_PIN    GPIO_NUM_8
@@ -304,38 +304,42 @@ void wifi_start_ap(void)
     g_web_server = start_webserver(&g_web_server);
 }
 
-// ===================== I2S音频初始化（ESP-IDF5.3新版API） =====================
+// ===================== I2S音频初始化【ESP-IDF v5.x 官方标准写法】 =====================
 esp_err_t i2s_audio_init(void)
 {
     // ========== 麦克风 I2S RX 通道 ==========
-    i2s_chan_config_t mic_chan_cfg = I2S_CHAN_DEFAULT_CONFIG_RX();
-    mic_chan_cfg.sample_rate_hz = SAMPLE_RATE;
+    i2s_chan_config_t mic_chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
     ESP_ERROR_CHECK(i2s_new_channel(&mic_chan_cfg, nullptr, &mic_chan));
 
-    i2s_std_config_t mic_std_cfg = I2S_STD_DEFAULT_CONFIG();
-    mic_std_cfg.clk_cfg.sample_rate_hz = SAMPLE_RATE;
-    mic_std_cfg.clk_cfg.bits_per_sample = SAMPLE_BITS;
-    mic_std_cfg.slot_cfg.slot_mode = I2S_SLOT_MODE_MONO;
-    mic_std_cfg.gpio_cfg.bclk = MIC_BCLK_PIN;
-    mic_std_cfg.gpio_cfg.ws = MIC_LRCK_PIN;
-    mic_std_cfg.gpio_cfg.data_in_pin = MIC_DATA_IN_PIN;
-    mic_std_cfg.gpio_cfg.data_out_pin = I2S_GPIO_UNUSED;
+    i2s_std_config_t mic_std_cfg = {
+        .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(SAMPLE_RATE),
+        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(SAMPLE_BIT_WIDTH, I2S_SLOT_MODE_MONO),
+        .gpio_cfg = {
+            .mclk = I2S_GPIO_UNUSED,
+            .bclk = MIC_BCLK_PIN,
+            .ws   = MIC_LRCK_PIN,
+            .din  = MIC_DATA_IN_PIN,
+            .dout = I2S_GPIO_UNUSED
+        }
+    };
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(mic_chan, &mic_std_cfg));
     ESP_ERROR_CHECK(i2s_channel_enable(mic_chan));
 
     // ========== 喇叭 I2S TX 通道 ==========
-    i2s_chan_config_t spk_chan_cfg = I2S_CHAN_DEFAULT_CONFIG_TX();
-    spk_chan_cfg.sample_rate_hz = SAMPLE_RATE;
+    i2s_chan_config_t spk_chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
     ESP_ERROR_CHECK(i2s_new_channel(&spk_chan_cfg, &spk_chan, nullptr));
 
-    i2s_std_config_t spk_std_cfg = I2S_STD_DEFAULT_CONFIG();
-    spk_std_cfg.clk_cfg.sample_rate_hz = SAMPLE_RATE;
-    spk_std_cfg.clk_cfg.bits_per_sample = SAMPLE_BITS;
-    spk_std_cfg.slot_cfg.slot_mode = I2S_SLOT_MODE_MONO;
-    spk_std_cfg.gpio_cfg.bclk = SPEAKER_BCLK_PIN;
-    spk_std_cfg.gpio_cfg.ws = SPEAKER_LRCK_PIN;
-    spk_std_cfg.gpio_cfg.data_out_pin = SPEAKER_DATA_OUT_PIN;
-    spk_std_cfg.gpio_cfg.data_in_pin = I2S_GPIO_UNUSED;
+    i2s_std_config_t spk_std_cfg = {
+        .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(SAMPLE_RATE),
+        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(SAMPLE_BIT_WIDTH, I2S_SLOT_MODE_MONO),
+        .gpio_cfg = {
+            .mclk = I2S_GPIO_UNUSED,
+            .bclk = SPEAKER_BCLK_PIN,
+            .ws   = SPEAKER_LRCK_PIN,
+            .din  = I2S_GPIO_UNUSED,
+            .dout = SPEAKER_DATA_OUT_PIN
+        }
+    };
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(spk_chan, &spk_std_cfg));
     ESP_ERROR_CHECK(i2s_channel_enable(spk_chan));
 
@@ -366,7 +370,7 @@ static void gpio_task(void* arg)
         if(xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY))
         {
             vTaskDelay(pdMS_TO_TICKS(20)); //消抖
-            int level = gpio_get_level(io_num);
+            int level = gpio_get_level((gpio_num_t)io_num);
             if(level == 0)
             {
                 ESP_LOGI(TAG, "按键按下 GPIO %" PRIu32, io_num);
