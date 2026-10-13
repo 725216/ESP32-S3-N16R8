@@ -304,7 +304,7 @@ void wifi_start_ap(void)
     g_web_server = start_webserver(&g_web_server);
 }
 
-// ===================== I2S音频初始化【ESP-IDF v5.x 官方标准写法】 =====================
+// ===================== I2S音频初始化【ESP-IDF v5.x 修复结构体顺序】 =====================
 esp_err_t i2s_audio_init(void)
 {
     // ========== 麦克风 I2S RX 通道 ==========
@@ -319,7 +319,12 @@ esp_err_t i2s_audio_init(void)
             .bclk = MIC_BCLK_PIN,
             .ws   = MIC_LRCK_PIN,
             .din  = MIC_DATA_IN_PIN,
-            .dout = I2S_GPIO_UNUSED
+            .dout = I2S_GPIO_UNUSED,
+            .invert_flags = {
+                .mclk_inv = false,
+                .bclk_inv = false,
+                .ws_inv = false,
+            },
         }
     };
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(mic_chan, &mic_std_cfg));
@@ -337,7 +342,12 @@ esp_err_t i2s_audio_init(void)
             .bclk = SPEAKER_BCLK_PIN,
             .ws   = SPEAKER_LRCK_PIN,
             .din  = I2S_GPIO_UNUSED,
-            .dout = SPEAKER_DATA_OUT_PIN
+            .dout = SPEAKER_DATA_OUT_PIN,
+            .invert_flags = {
+                .mclk_inv = false,
+                .bclk_inv = false,
+                .ws_inv = false,
+            },
         }
     };
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(spk_chan, &spk_std_cfg));
@@ -401,7 +411,7 @@ static void gpio_task(void* arg)
 static void IRAM_ATTR gpio_isr_handler(void* arg)
 {
     uint32_t gpio_num = (uint32_t)arg;
-    xQueueSendFromISR(gpio_evt_queue, &gpio_num, nullptr);
+    xQueueSendFromISR(gpio_evt_queue, &gpio_num, NULL);
 }
 
 void gpio_keys_init(void)
@@ -416,7 +426,7 @@ void gpio_keys_init(void)
     gpio_config(&io_conf);
 
     gpio_evt_queue = xQueueCreate(10, sizeof(uint32_t));
-    xTaskCreate(gpio_task, "gpio_task", 2048, nullptr, 10, nullptr);
+    xTaskCreate(gpio_task, "gpio_task", 2048, NULL, 10, NULL);
 
     gpio_install_isr_service(0);
     gpio_isr_handler_add(KEY_TALK, gpio_isr_handler, (void*)KEY_TALK);
@@ -433,7 +443,7 @@ void audio_start_capture_and_upload(void)
 
 void xiaozhi_mcp_start(void)
 {
-    ESP_LOGI(TAG, "小智MCP服务启动");
+    ESP_LOGI(TAG, "小智MCP客户端启动");
 }
 
 // ===================== app_main入口 =====================
@@ -441,8 +451,8 @@ extern "C" void app_main(void)
 {
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ret = nvs_flash_init();
+      ESP_ERROR_CHECK(nvs_flash_erase());
+      ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
 
@@ -451,9 +461,7 @@ extern "C" void app_main(void)
 
     wifi_scan_sem = xSemaphoreCreateBinary();
 
-    // 初始化I2S音频
     ESP_ERROR_CHECK(i2s_audio_init());
-    // 初始化按键
     gpio_keys_init();
 
     char ssid[33]={0}, pass[64]={0};
@@ -464,7 +472,7 @@ extern "C" void app_main(void)
     }
     else
     {
-        ESP_LOGI(TAG, "无保存WiFi，直接进入AP配网模式");
+        ESP_LOGI(TAG, "无保存WiFi，进入AP配网");
         wifi_start_ap();
     }
 }
