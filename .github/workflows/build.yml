@@ -20,7 +20,7 @@ jobs:
           esp_idf_version: v5.3.1
           target: esp32s3
           command: |
-            idf.py build --no-merge-bin
+            idf.py build
 
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
