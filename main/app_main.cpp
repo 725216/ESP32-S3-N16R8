@@ -1,5 +1,6 @@
 #include <cstdio>
 #include <cstring>
+#include <inttypes.h>
 #include "driver/gpio.h"
 #include "driver/i2s.h"
 #include "nvs_flash.h"
@@ -58,7 +59,7 @@ const char* xiaozhi_token = XIAOZHI_TOKEN;
 const char* xiaozhi_token = "";
 #endif
 
-// ========== 函数前置声明 【解决start_webserver未定义】 ==========
+// ========== 函数前置声明 ==========
 httpd_handle_t start_webserver(httpd_handle_t *server);
 void wifi_start_ap(void);
 void audio_start_capture_and_upload(void);
@@ -78,7 +79,7 @@ static void key_task(void* arg)
             vTaskDelay(pdMS_TO_TICKS(20)); //消抖
             if(gpio_get_level((gpio_num_t)io_num) == 0)
             {
-                ESP_LOGI(TAG, "按下按键: GPIO %d", io_num);
+                ESP_LOGI(TAG, "按下按键: GPIO %" PRIu32, io_num);
                 switch(io_num)
                 {
                     case KEY_TALK:
@@ -145,18 +146,34 @@ void wifi_init_sta(const char* ssid, const char* pwd)
     ESP_ERROR_CHECK(esp_wifi_start());
 }
 
-// AP热点（无密码，网页配网）【修复结构体初始化顺序问题】
+// AP热点（无密码，网页配网）【完整初始化所有AP字段，消除警告】
 void wifi_start_ap(void)
 {
     esp_netif_create_default_wifi_ap();
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
-    wifi_config_t ap_cfg = {0}; // 全部置零，规避缺少字段警告
-    strcpy((char *)ap_cfg.ap.ssid, "ESP32S3-AI");
-    ap_cfg.ap.ssid_len = strlen("ESP32S3-AI");
-    ap_cfg.ap.max_connection = 4;
-    ap_cfg.ap.authmode = WIFI_AUTH_OPEN;
+    wifi_config_t ap_cfg = {
+        .ap = {
+            .ssid = "ESP32S3-AI",
+            .ssid_len = sizeof("ESP32S3-AI") -1,
+            .password = "",
+            .channel = 1,
+            .ssid_hidden = 0,
+            .max_connection = 4,
+            .authmode = WIFI_AUTH_OPEN,
+            .beacon_interval = 100,
+            .dtim_period = 1,
+            .csa_count = 0,
+            .pairwise_cipher = WIFI_CIPHER_TYPE_NONE,
+            .ftm_responder = false,
+            .pmf_cfg = {
+                .capable = false,
+                .required = false,
+            },
+            .sae_pwe_h2e = WPA3_SAE_PWE_UNSPECIFIED,
+        }
+    };
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_cfg));
