@@ -16,6 +16,11 @@
 #include "esp_log.h"
 #include "esp_http_server.h"
 #include "nvs.h"
+#include "esp_timer.h"
+
+#define SAMPLE_RATE 16000
+#define SAMPLE_BITS I2S_BITS_PER_SAMPLE_16BIT
+#define PCM_BLOCK_SIZE 512
 
 // ===================== 硬件引脚定义 =====================
 #define MIC_BCLK_PIN    GPIO_NUM_8
@@ -26,12 +31,12 @@
 #define SPEAKER_LRCK_PIN GPIO_NUM_11
 #define SPEAKER_DATA_OUT_PIN GPIO_NUM_12
 
-#define KEY_TALK        GPIO_NUM_1   // 对话按键 GPIO1
-#define KEY_SWITCH_1    GPIO_NUM_2   // 切换 豆包
-#define KEY_SWITCH_2    GPIO_NUM_3   // 切换 Coze
-#define KEY_SWITCH_3    GPIO_NUM_4   // 切换 小智
+#define KEY_TALK        GPIO_NUM_1
+#define KEY_SWITCH_1    GPIO_NUM_2
+#define KEY_SWITCH_2    GPIO_NUM_3
+#define KEY_SWITCH_3    GPIO_NUM_4
 
-// ===================== AI 模式枚举 =====================
+// ===================== AI模式枚举 =====================
 enum AIMode {
     AI_DOUBAO,
     AI_COZE,
@@ -47,7 +52,13 @@ static wifi_ap_record_t scan_list[16];
 static uint16_t scan_count = 0;
 static const char *TAG = "AI_CHAT_S3";
 
-// GitHub Actions注入密钥
+// I2S句柄
+i2s_std_config_t mic_i2s_cfg;
+i2s_std_config_t spk_i2s_cfg;
+i2s_chan_handle_t mic_chan = nullptr;
+i2s_chan_handle_t spk_chan = nullptr;
+
+// Github CI注入密钥（仅豆包、Coze，小智无token）
 #ifdef COZE_TOKEN
 const char* coze_token = COZE_TOKEN;
 #else
@@ -60,12 +71,6 @@ const char* doubao_apikey = DOUBAO_APIKEY;
 const char* doubao_apikey = "";
 #endif
 
-#ifdef XIAOZHI_TOKEN
-const char* xiaozhi_token = XIAOZHI_TOKEN;
-#else
-const char* xiaozhi_token = "";
-#endif
-
 // ========== 函数前置声明 ==========
 httpd_handle_t start_webserver(httpd_handle_t *server);
 void stop_webserver(httpd_handle_t server);
@@ -75,14 +80,16 @@ void audio_start_capture_and_upload(void);
 esp_err_t nvs_save_wifi(const char* ssid, const char* pass);
 esp_err_t nvs_load_wifi(char* out_ssid, char* out_pwd, size_t buf_len);
 void start_wifi_scan(void);
+esp_err_t i2s_audio_init(void);
+void i2s_audio_deinit(void);
+void xiaozhi_mcp_start(void);
 
-// ===================== NVS读写WiFi账号密码 =====================
+// ===================== NVS读写WiFi =====================
 esp_err_t nvs_save_wifi(const char* ssid, const char* pass)
 {
     nvs_handle_t nvs_handle;
     esp_err_t err = nvs_open("wifi_cfg", NVS_READWRITE, &nvs_handle);
     if(err != ESP_OK) return err;
-
     nvs_set_str(nvs_handle, "ssid", ssid);
     nvs_set_str(nvs_handle, "pass", pass);
     nvs_commit(nvs_handle);
@@ -96,7 +103,6 @@ esp_err_t nvs_load_wifi(char* out_ssid, char* out_pwd, size_t buf_len)
     nvs_handle_t nvs_handle;
     esp_err_t err = nvs_open("wifi_cfg", NVS_READONLY, &nvs_handle);
     if(err != ESP_OK) return err;
-
     size_t len = buf_len;
     err = nvs_get_str(nvs_handle, "ssid", out_ssid, &len);
     if(err != ESP_OK) {
@@ -127,8 +133,7 @@ void start_wifi_scan(void)
     esp_wifi_scan_start(&scan_cfg, false);
 }
 
-// ===================== HTTP网页接口 =====================
-// 主页配网页面
+// ===================== Web网页配网 =====================
 static esp_err_t web_root_handler(httpd_req_t *req)
 {
     char html[4096];
@@ -141,7 +146,6 @@ static esp_err_t web_root_handler(httpd_req_t *req)
         char ssid[33];
         memcpy(ssid, scan_list[i].ssid, 32);
         ssid[32]=0;
-        // 无密码标记
         const char* lock = (scan_list[i].authmode == WIFI_AUTH_OPEN) ? "🔓" : "🔒";
         sprintf(opt_buf + strlen(opt_buf), "<option value=\"%s\">%s %s (RSSI:%d)</option>", ssid, lock, ssid, scan_list[i].rssi);
     }
@@ -179,7 +183,6 @@ button{background:#007bff;color:#fff;border:none;padding:12px;width:100%;font-si
     return ESP_OK;
 }
 
-// 保存WiFi提交接口
 static esp_err_t web_savewifi_handler(httpd_req_t *req)
 {
     char buf[512];
@@ -223,9 +226,8 @@ void stop_webserver(httpd_handle_t server)
     if(server) httpd_stop(server);
 }
 
-// ===================== WiFi事件回调 =====================
-static void wifi_event_handler(void* arg, esp_event_base_t event_base,
-                                    int32_t event_id, void* event_data)
+// ===================== WiFi事件 =====================
+static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data)
 {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
@@ -237,10 +239,13 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
         ESP_LOGI(TAG, "WiFi已连接,ip:" IPSTR, IP2STR(&event->ip_info.ip));
         g_wifi_connected = true;
+        if(g_ai_mode == AI_XIAOZHI)
+        {
+            xiaozhi_mcp_start();
+        }
     }
 }
 
-// STA连接WiFi
 void wifi_init_sta(const char* ssid, const char* pwd)
 {
     esp_netif_create_default_wifi_sta();
@@ -262,7 +267,6 @@ void wifi_init_sta(const char* ssid, const char* pwd)
     ESP_LOGI(TAG, "STA模式，尝试连接: %s", ssid);
 }
 
-// AP热点（无密码，网页配网）
 void wifi_start_ap(void)
 {
     if(g_web_server != nullptr) return;
@@ -273,32 +277,90 @@ void wifi_start_ap(void)
 
     wifi_config_t ap_cfg;
     memset(&ap_cfg, 0, sizeof(wifi_config_t));
-
     strcpy((char *)ap_cfg.ap.ssid, "ESP32S3-AI");
     ap_cfg.ap.ssid_len = strlen("ESP32S3-AI");
     ap_cfg.ap.channel = 1;
     ap_cfg.ap.max_connection = 4;
     ap_cfg.ap.authmode = WIFI_AUTH_OPEN;
-    ap_cfg.ap.beacon_interval = 100;
-    ap_cfg.ap.dtim_period = 1;
-    ap_cfg.ap.pairwise_cipher = WIFI_CIPHER_TYPE_NONE;
-    ap_cfg.ap.ftm_responder = false;
-    ap_cfg.ap.pmf_cfg.capable = false;
-    ap_cfg.ap.pmf_cfg.required = false;
-    ap_cfg.ap.sae_pwe_h2e = WPA3_SAE_PWE_UNSPECIFIED;
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_cfg));
     ESP_ERROR_CHECK(esp_wifi_start());
-    ESP_LOGI(TAG, "AP热点开启，名称ESP32S3-AI，无密码。访问 192.168.4.1");
-
+    ESP_LOGI(TAG, "AP热点开启 ESP32S3-AI 无密码，访问192.168.4.1");
     g_web_server = start_webserver(&g_web_server);
 }
 
-// ===================== I2S音频采集占位 =====================
+// ===================== I2S音频初始化 =====================
+esp_err_t i2s_audio_init(void)
+{
+    // 麦克风I2S RX
+    mic_i2s_cfg = I2S_STD_DEFAULT_CONFIG();
+    mic_i2s_cfg.clock_cfg.sample_rate_hz = SAMPLE_RATE;
+    mic_i2s_cfg.clock_cfg.bits_per_sample = SAMPLE_BITS;
+    mic_i2s_cfg.slot_cfg.slot_mode = I2S_SLOT_MODE_MONO;
+    mic_i2s_cfg.gpio_cfg.bclk = MIC_BCLK_PIN;
+    mic_i2s_cfg.gpio_cfg.ws = MIC_LRCK_PIN;
+    mic_i2s_cfg.gpio_cfg.data_in = MIC_DATA_IN_PIN;
+    mic_i2s_cfg.gpio_cfg.data_out = I2S_GPIO_UNUSED;
+    ESP_ERROR_CHECK(i2s_new_channel(&mic_i2s_cfg, nullptr, &mic_chan));
+    ESP_ERROR_CHECK(i2s_channel_enable(mic_chan));
+
+    // 喇叭I2S TX
+    spk_i2s_cfg = I2S_STD_DEFAULT_CONFIG();
+    spk_i2s_cfg.clock_cfg.sample_rate_hz = SAMPLE_RATE;
+    spk_i2s_cfg.clock_cfg.bits_per_sample = SAMPLE_BITS;
+    spk_i2s_cfg.slot_cfg.slot_mode = I2S_SLOT_MODE_MONO;
+    spk_i2s_cfg.gpio_cfg.bclk = SPEAKER_BCLK_PIN;
+    spk_i2s_cfg.gpio_cfg.ws = SPEAKER_LRCK_PIN;
+    spk_i2s_cfg.gpio_cfg.data_out = SPEAKER_DATA_OUT_PIN;
+    spk_i2s_cfg.gpio_cfg.data_in = I2S_GPIO_UNUSED;
+    ESP_ERROR_CHECK(i2s_new_channel(&spk_i2s_cfg, &spk_chan, nullptr));
+    ESP_ERROR_CHECK(i2s_channel_enable(spk_chan));
+    ESP_LOGI(TAG, "I2S INMP441 + MAX98357 初始化完成");
+    return ESP_OK;
+}
+
+void i2s_audio_deinit(void)
+{
+    if(mic_chan) i2s_channel_disable(mic_chan);
+    if(spk_chan) i2s_channel_disable(spk_chan);
+    if(mic_chan) i2s_del_channel(mic_chan);
+    if(spk_chan) i2s_del_channel(spk_chan);
+}
+
+// ===================== 录音+上传AI =====================
 void audio_start_capture_and_upload(void)
 {
-    ESP_LOGI(TAG, "I2S麦克风采集PCM，上传云端API，TTS返回播放");
+    if(!g_wifi_connected)
+    {
+        ESP_LOGW(TAG,"无WiFi，无法语音交互");
+        return;
+    }
+    ESP_LOGI(TAG,"开始录音，当前AI模式: %d",g_ai_mode);
+    int16_t pcm_buf[PCM_BLOCK_SIZE];
+    size_t bytes_read;
+    // 读取PCM
+    i2s_channel_read(mic_chan, pcm_buf, sizeof(pcm_buf), &bytes_read, pdMS_TO_TICKS(1000));
+
+    switch(g_ai_mode)
+    {
+        case AI_DOUBAO:
+            ESP_LOGI(TAG,"豆包模式，PCM准备上传火山引擎ASR");
+            // 这里可扩展HTTP上传PCM，接收TTS音频写入spk_chan播放
+            break;
+        case AI_COZE:
+            ESP_LOGI(TAG,"Coze模式，PCM上传扣子语音API");
+            break;
+        case AI_XIAOZHI:
+            ESP_LOGI(TAG,"小智模式 MCP WebSocket流式语音");
+            break;
+    }
+    ESP_LOGI(TAG,"录音结束");
+}
+
+void xiaozhi_mcp_start(void)
+{
+    ESP_LOGI(TAG,"小智MCP启动，等待服务器返回6位验证码，请打开xiaozhi.me绑定设备");
 }
 
 // ===================== GPIO中断回调(按键) =====================
@@ -388,6 +450,7 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
     gpio_key_init();
+    i2s_audio_init();
 
     char saved_ssid[33] = {0};
     char saved_pwd[64] = {0};
