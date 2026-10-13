@@ -1,3 +1,0 @@
-dependencies:
-  espressif/http_client: "*"
-  espressif/nvs_flash: "*"
