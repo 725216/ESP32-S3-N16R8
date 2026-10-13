@@ -304,10 +304,10 @@ void wifi_start_ap(void)
     g_web_server = start_webserver(&g_web_server);
 }
 
-// ===================== I2S音频初始化【ESP-IDF v5.x 修复结构体顺序】 =====================
+// ===================== I2S音频初始化【ESP-IDF v5.3.1，修正结构体顺序】 =====================
 esp_err_t i2s_audio_init(void)
 {
-    // ========== 麦克风 I2S RX 通道 ==========
+    // ========== 麦克风 I2S RX 通道（INMP441） ==========
     i2s_chan_config_t mic_chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
     ESP_ERROR_CHECK(i2s_new_channel(&mic_chan_cfg, nullptr, &mic_chan));
 
@@ -318,8 +318,8 @@ esp_err_t i2s_audio_init(void)
             .mclk = I2S_GPIO_UNUSED,
             .bclk = MIC_BCLK_PIN,
             .ws   = MIC_LRCK_PIN,
-            .din  = MIC_DATA_IN_PIN,
             .dout = I2S_GPIO_UNUSED,
+            .din  = MIC_DATA_IN_PIN,
             .invert_flags = {
                 .mclk_inv = false,
                 .bclk_inv = false,
@@ -330,7 +330,7 @@ esp_err_t i2s_audio_init(void)
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(mic_chan, &mic_std_cfg));
     ESP_ERROR_CHECK(i2s_channel_enable(mic_chan));
 
-    // ========== 喇叭 I2S TX 通道 ==========
+    // ========== 喇叭 I2S TX 通道（MAX98357A） ==========
     i2s_chan_config_t spk_chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
     ESP_ERROR_CHECK(i2s_new_channel(&spk_chan_cfg, &spk_chan, nullptr));
 
@@ -341,8 +341,8 @@ esp_err_t i2s_audio_init(void)
             .mclk = I2S_GPIO_UNUSED,
             .bclk = SPEAKER_BCLK_PIN,
             .ws   = SPEAKER_LRCK_PIN,
-            .din  = I2S_GPIO_UNUSED,
             .dout = SPEAKER_DATA_OUT_PIN,
+            .din  = I2S_GPIO_UNUSED,
             .invert_flags = {
                 .mclk_inv = false,
                 .bclk_inv = false,
