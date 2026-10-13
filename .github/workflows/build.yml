@@ -1,4 +1,4 @@
-name: Build ESP32S3
+name: Build ESP32S3 AI Chat
 on:
   push:
   pull_request:
@@ -7,16 +7,29 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      IDF_TARGET: esp32s3
       COZE_TOKEN: ${{ secrets.COZE_TOKEN }}
       DOUBAO_APIKEY: ${{ secrets.DOUBAO_APIKEY }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Setup ESP-IDF
-        uses: espressif/setup-idf@v5
+      - name: Checkout code
+        uses: actions/checkout@v4
         with:
-          idf-version: v5.3.1
-      - name: Build
-        run: |
-          idf.py set-target esp32s3
-          idf.py build
+          submodules: recursive
+
+      - name: Build ESP-IDF Project
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.3.1
+          target: esp32s3
+          path: '.'
+          # 国内加速，拉取组件更快，防止超时
+          env: |
+            IDF_GITHUB_ASSETS=dl.espressif.cn/github_assets
+
+      # 编译成功后，上传固件bin作为制品
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-bin
+          path: |
+            build/*.bin
+            build/merged-binary.bin
