@@ -58,6 +58,11 @@ const char* xiaozhi_token = XIAOZHI_TOKEN;
 const char* xiaozhi_token = "";
 #endif
 
+// ========== 函数前置声明 【解决start_webserver未定义】 ==========
+httpd_handle_t start_webserver(httpd_handle_t *server);
+void wifi_start_ap(void);
+void audio_start_capture_and_upload(void);
+
 // ===================== GPIO中断回调(按键) =====================
 static void IRAM_ATTR gpio_isr_handler(void* arg)
 {
@@ -140,22 +145,19 @@ void wifi_init_sta(const char* ssid, const char* pwd)
     ESP_ERROR_CHECK(esp_wifi_start());
 }
 
-// AP热点（无密码，网页配网）
+// AP热点（无密码，网页配网）【修复结构体初始化顺序问题】
 void wifi_start_ap(void)
 {
     esp_netif_create_default_wifi_ap();
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
-    wifi_config_t ap_cfg = {
-        .ap = {
-            .ssid = "ESP32S3-AI",
-            .ssid_len = strlen("ESP32S3-AI"),
-            .password = "",
-            .max_connection = 4,
-            .authmode = WIFI_AUTH_OPEN //无密码热点
-        }
-    };
+    wifi_config_t ap_cfg = {0}; // 全部置零，规避缺少字段警告
+    strcpy((char *)ap_cfg.ap.ssid, "ESP32S3-AI");
+    ap_cfg.ap.ssid_len = strlen("ESP32S3-AI");
+    ap_cfg.ap.max_connection = 4;
+    ap_cfg.ap.authmode = WIFI_AUTH_OPEN;
+
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_cfg));
     ESP_ERROR_CHECK(esp_wifi_start());
