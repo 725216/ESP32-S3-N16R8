@@ -2,6 +2,8 @@ idf_component_register(SRCS "app_main.cpp"
                     INCLUDE_DIRS "."
                     PRIV_REQUIRES driver esp_http_client esp_http_server nvs_flash esp_wifi esp_event esp_netif esp_driver_i2s esp_driver_gpio)
 
+target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-missing-field-initializers)
+
 if(DEFINED ENV{COZE_TOKEN})
   add_compile_definitions(COZE_TOKEN="$ENV{COZE_TOKEN}")
 endif()
