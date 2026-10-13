@@ -16,7 +16,6 @@
 #include "esp_log.h"
 #include "esp_http_server.h"
 #include "nvs.h"
-#include "esp_timer.h"
 
 #define SAMPLE_RATE 16000
 #define SAMPLE_BITS I2S_BITS_PER_SAMPLE_16BIT
@@ -56,8 +55,6 @@ static int g_wifi_retry_cnt = 0;
 static bool g_ap_started = false;
 
 // I2S句柄
-i2s_std_config_t mic_i2s_cfg;
-i2s_std_config_t spk_i2s_cfg;
 i2s_chan_handle_t mic_chan = nullptr;
 i2s_chan_handle_t spk_chan = nullptr;
 
@@ -86,6 +83,7 @@ void start_wifi_scan(void);
 esp_err_t i2s_audio_init(void);
 void i2s_audio_deinit(void);
 void xiaozhi_mcp_start(void);
+static void gpio_task(void* arg);
 
 // ===================== NVS读写WiFi =====================
 esp_err_t nvs_save_wifi(const char* ssid, const char* pass)
@@ -150,7 +148,8 @@ static esp_err_t web_root_handler(httpd_req_t *req)
         memcpy(ssid, scan_list[i].ssid, 32);
         ssid[32]=0;
         const char* lock = (scan_list[i].authmode == WIFI_AUTH_OPEN) ? "🔓" : "🔒";
-        sprintf(opt_buf + strlen(opt_buf), "<option value=\"%s\">%s %s (RSSI:%d)</option>", ssid, lock, ssid, scan_list[i].rssi);
+        snprintf(opt_buf + strlen(opt_buf), sizeof(opt_buf)-strlen(opt_buf),
+                 "<option value=\"%s\">%s %s (RSSI:%d)</option>", ssid, lock, ssid, scan_list[i].rssi);
     }
     xSemaphoreGive(wifi_scan_sem);
 
@@ -305,117 +304,88 @@ void wifi_start_ap(void)
     g_web_server = start_webserver(&g_web_server);
 }
 
-// ===================== I2S音频初始化 =====================
+// ===================== I2S音频初始化（ESP-IDF5.3新版API） =====================
 esp_err_t i2s_audio_init(void)
 {
-    // 麦克风I2S RX
-    mic_i2s_cfg = I2S_STD_DEFAULT_CONFIG();
-    mic_i2s_cfg.clock_cfg.sample_rate_hz = SAMPLE_RATE;
-    mic_i2s_cfg.clock_cfg.bits_per_sample = SAMPLE_BITS;
-    mic_i2s_cfg.slot_cfg.slot_mode = I2S_SLOT_MODE_MONO;
-    mic_i2s_cfg.gpio_cfg.bclk = MIC_BCLK_PIN;
-    mic_i2s_cfg.gpio_cfg.ws = MIC_LRCK_PIN;
-    mic_i2s_cfg.gpio_cfg.data_in = MIC_DATA_IN_PIN;
-    mic_i2s_cfg.gpio_cfg.data_out = I2S_GPIO_UNUSED;
-    ESP_ERROR_CHECK(i2s_new_channel(&mic_i2s_cfg, nullptr, &mic_chan));
+    // ========== 麦克风 I2S RX 通道 ==========
+    i2s_chan_config_t mic_chan_cfg = I2S_CHAN_DEFAULT_CONFIG_RX();
+    mic_chan_cfg.sample_rate_hz = SAMPLE_RATE;
+    ESP_ERROR_CHECK(i2s_new_channel(&mic_chan_cfg, nullptr, &mic_chan));
+
+    i2s_std_config_t mic_std_cfg = I2S_STD_DEFAULT_CONFIG();
+    mic_std_cfg.clk_cfg.sample_rate_hz = SAMPLE_RATE;
+    mic_std_cfg.clk_cfg.bits_per_sample = SAMPLE_BITS;
+    mic_std_cfg.slot_cfg.slot_mode = I2S_SLOT_MODE_MONO;
+    mic_std_cfg.gpio_cfg.bclk = MIC_BCLK_PIN;
+    mic_std_cfg.gpio_cfg.ws = MIC_LRCK_PIN;
+    mic_std_cfg.gpio_cfg.data_in_pin = MIC_DATA_IN_PIN;
+    mic_std_cfg.gpio_cfg.data_out_pin = I2S_GPIO_UNUSED;
+    ESP_ERROR_CHECK(i2s_channel_init_std_mode(mic_chan, &mic_std_cfg));
     ESP_ERROR_CHECK(i2s_channel_enable(mic_chan));
 
-    // 喇叭I2S TX
-    spk_i2s_cfg = I2S_STD_DEFAULT_CONFIG();
-    spk_i2s_cfg.clock_cfg.sample_rate_hz = SAMPLE_RATE;
-    spk_i2s_cfg.clock_cfg.bits_per_sample = SAMPLE_BITS;
-    spk_i2s_cfg.slot_cfg.slot_mode = I2S_SLOT_MODE_MONO;
-    spk_i2s_cfg.gpio_cfg.bclk = SPEAKER_BCLK_PIN;
-    spk_i2s_cfg.gpio_cfg.ws = SPEAKER_LRCK_PIN;
-    spk_i2s_cfg.gpio_cfg.data_out = SPEAKER_DATA_OUT_PIN;
-    spk_i2s_cfg.gpio_cfg.data_in = I2S_GPIO_UNUSED;
-    ESP_ERROR_CHECK(i2s_new_channel(&spk_i2s_cfg, &spk_chan, nullptr));
+    // ========== 喇叭 I2S TX 通道 ==========
+    i2s_chan_config_t spk_chan_cfg = I2S_CHAN_DEFAULT_CONFIG_TX();
+    spk_chan_cfg.sample_rate_hz = SAMPLE_RATE;
+    ESP_ERROR_CHECK(i2s_new_channel(&spk_chan_cfg, &spk_chan, nullptr));
+
+    i2s_std_config_t spk_std_cfg = I2S_STD_DEFAULT_CONFIG();
+    spk_std_cfg.clk_cfg.sample_rate_hz = SAMPLE_RATE;
+    spk_std_cfg.clk_cfg.bits_per_sample = SAMPLE_BITS;
+    spk_std_cfg.slot_cfg.slot_mode = I2S_SLOT_MODE_MONO;
+    spk_std_cfg.gpio_cfg.bclk = SPEAKER_BCLK_PIN;
+    spk_std_cfg.gpio_cfg.ws = SPEAKER_LRCK_PIN;
+    spk_std_cfg.gpio_cfg.data_out_pin = SPEAKER_DATA_OUT_PIN;
+    spk_std_cfg.gpio_cfg.data_in_pin = I2S_GPIO_UNUSED;
+    ESP_ERROR_CHECK(i2s_channel_init_std_mode(spk_chan, &spk_std_cfg));
     ESP_ERROR_CHECK(i2s_channel_enable(spk_chan));
+
     ESP_LOGI(TAG, "I2S INMP441 + MAX98357 初始化完成");
     return ESP_OK;
 }
 
 void i2s_audio_deinit(void)
 {
-    if(mic_chan) i2s_channel_disable(mic_chan);
-    if(spk_chan) i2s_channel_disable(spk_chan);
-    if(mic_chan) i2s_del_channel(mic_chan);
-    if(spk_chan) i2s_del_channel(spk_chan);
-}
-
-// ===================== 录音+上传AI =====================
-void audio_start_capture_and_upload(void)
-{
-    if(!g_wifi_connected)
-    {
-        ESP_LOGW(TAG,"无WiFi，无法语音交互");
-        return;
+    if(mic_chan) {
+        i2s_channel_disable(mic_chan);
+        i2s_del_channel(mic_chan);
+        mic_chan = nullptr;
     }
-    ESP_LOGI(TAG,"开始录音，当前AI模式: %d",g_ai_mode);
-    int16_t pcm_buf[PCM_BLOCK_SIZE];
-    size_t bytes_read;
-    // 读取PCM
-    i2s_channel_read(mic_chan, pcm_buf, sizeof(pcm_buf), &bytes_read, pdMS_TO_TICKS(1000));
-
-    switch(g_ai_mode)
-    {
-        case AI_DOUBAO:
-            ESP_LOGI(TAG,"豆包模式，PCM准备上传火山引擎ASR");
-            // 这里可扩展HTTP上传PCM，接收TTS音频写入spk_chan播放
-            break;
-        case AI_COZE:
-            ESP_LOGI(TAG,"Coze模式，PCM上传扣子语音API");
-            break;
-        case AI_XIAOZHI:
-            ESP_LOGI(TAG,"小智模式 MCP WebSocket流式语音");
-            break;
+    if(spk_chan) {
+        i2s_channel_disable(spk_chan);
+        i2s_del_channel(spk_chan);
+        spk_chan = nullptr;
     }
-    ESP_LOGI(TAG,"录音结束");
 }
 
-void xiaozhi_mcp_start(void)
-{
-    ESP_LOGI(TAG,"小智MCP启动，等待服务器返回6位验证码，请打开xiaozhi.me绑定设备");
-}
-
-// ===================== GPIO中断回调(按键) =====================
-static void IRAM_ATTR gpio_isr_handler(void* arg)
-{
-    uint32_t gpio_num = (uint32_t)arg;
-    xQueueSendFromISR(gpio_evt_queue, &gpio_num, nullptr);
-}
-
-static void key_task(void* arg)
+// ===================== GPIO按键中断任务 =====================
+static void gpio_task(void* arg)
 {
     uint32_t io_num;
-    for(;;) {
-        if(xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY)) {
+    for(;;)
+    {
+        if(xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY))
+        {
             vTaskDelay(pdMS_TO_TICKS(20)); //消抖
-            if(gpio_get_level((gpio_num_t)io_num) == 0)
+            int level = gpio_get_level(io_num);
+            if(level == 0)
             {
-                ESP_LOGI(TAG, "按下按键: GPIO %" PRIu32, io_num);
+                ESP_LOGI(TAG, "按键按下 GPIO %" PRIu32, io_num);
                 switch(io_num)
                 {
                     case KEY_TALK:
-                        ESP_LOGI(TAG, "对话按键按下");
-                        if(!g_wifi_connected) {
-                            ESP_LOGW(TAG, "无WiFi，开启AP配网");
-                            wifi_start_ap();
-                        } else {
-                            audio_start_capture_and_upload();
-                        }
+                        if(g_wifi_connected) audio_start_capture_and_upload();
                         break;
                     case KEY_SWITCH_1:
                         g_ai_mode = AI_DOUBAO;
-                        ESP_LOGI(TAG, "切换AI: 豆包");
+                        ESP_LOGI(TAG, "切换至【豆包】模式");
                         break;
                     case KEY_SWITCH_2:
                         g_ai_mode = AI_COZE;
-                        ESP_LOGI(TAG, "切换AI: Coze");
+                        ESP_LOGI(TAG, "切换至【Coze】模式");
                         break;
                     case KEY_SWITCH_3:
                         g_ai_mode = AI_XIAOZHI;
-                        ESP_LOGI(TAG, "切换AI: 小智");
+                        ESP_LOGI(TAG, "切换至【小智】模式");
                         break;
                     default: break;
                 }
@@ -424,11 +394,15 @@ static void key_task(void* arg)
     }
 }
 
-// ===================== 初始化按键GPIO =====================
-void gpio_key_init(void)
+static void IRAM_ATTR gpio_isr_handler(void* arg)
 {
-    gpio_config_t io_conf;
-    memset(&io_conf,0,sizeof(gpio_config_t));
+    uint32_t gpio_num = (uint32_t)arg;
+    xQueueSendFromISR(gpio_evt_queue, &gpio_num, nullptr);
+}
+
+void gpio_keys_init(void)
+{
+    gpio_config_t io_conf = {};
     io_conf.intr_type = GPIO_INTR_NEGEDGE;
     io_conf.mode = GPIO_MODE_INPUT;
     io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
@@ -438,22 +412,29 @@ void gpio_key_init(void)
     gpio_config(&io_conf);
 
     gpio_evt_queue = xQueueCreate(10, sizeof(uint32_t));
-    xTaskCreate(key_task, "key_task", 4096, nullptr, 10, nullptr);
+    xTaskCreate(gpio_task, "gpio_task", 2048, nullptr, 10, nullptr);
 
+    gpio_install_isr_service(0);
     gpio_isr_handler_add(KEY_TALK, gpio_isr_handler, (void*)KEY_TALK);
     gpio_isr_handler_add(KEY_SWITCH_1, gpio_isr_handler, (void*)KEY_SWITCH_1);
     gpio_isr_handler_add(KEY_SWITCH_2, gpio_isr_handler, (void*)KEY_SWITCH_2);
     gpio_isr_handler_add(KEY_SWITCH_3, gpio_isr_handler, (void*)KEY_SWITCH_3);
-    gpio_install_isr_service(0);
 }
 
-// ===================== 程序入口 =====================
+// ===================== 占位函数（后续实现音频上传、小智MCP） =====================
+void audio_start_capture_and_upload(void)
+{
+    ESP_LOGI(TAG, "开始录音并上传音频，当前AI模式:%d", g_ai_mode);
+}
+
+void xiaozhi_mcp_start(void)
+{
+    ESP_LOGI(TAG, "小智MCP服务启动");
+}
+
+// ===================== app_main入口 =====================
 extern "C" void app_main(void)
 {
-    ESP_LOGI(TAG, "ESP32S3 AI语音助手启动");
-    wifi_scan_sem = xSemaphoreCreateBinary();
-    xSemaphoreGive(wifi_scan_sem);
-
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -464,20 +445,22 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    gpio_key_init();
-    i2s_audio_init();
+    wifi_scan_sem = xSemaphoreCreateBinary();
 
-    char saved_ssid[33] = {0};
-    char saved_pwd[64] = {0};
-    ret = nvs_load_wifi(saved_ssid, saved_pwd, sizeof(saved_ssid));
-    if(ret == ESP_OK && strlen(saved_ssid) > 0)
+    // 初始化I2S音频
+    ESP_ERROR_CHECK(i2s_audio_init());
+    // 初始化按键
+    gpio_keys_init();
+
+    char ssid[33]={0}, pass[64]={0};
+    if(nvs_load_wifi(ssid, pass, sizeof(ssid)) == ESP_OK)
     {
-        ESP_LOGI(TAG, "读取NVS保存WiFi: %s", saved_ssid);
-        wifi_init_sta(saved_ssid, saved_pwd);
+        ESP_LOGI(TAG, "NVS读取WiFi:%s", ssid);
+        wifi_init_sta(ssid, pass);
     }
     else
     {
-        ESP_LOGI(TAG, "NVS无WiFi配置，直接开启AP配网");
+        ESP_LOGI(TAG, "无保存WiFi，直接进入AP配网模式");
         wifi_start_ap();
     }
 }
