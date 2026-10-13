@@ -1,2 +1,2 @@
 dependencies:
-  espressif/esp-xiaozhi: "^1.0.0"
+  espressif/http_client: "*"
