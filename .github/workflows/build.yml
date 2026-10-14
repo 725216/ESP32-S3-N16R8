@@ -29,4 +29,4 @@ jobs:
           path: |
             build/bootloader/bootloader.bin
             build/partition_table/partition-table.bin
-            build/app.bin
+            build/ai_chat_s3.bin
