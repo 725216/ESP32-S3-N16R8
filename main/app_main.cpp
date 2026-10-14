@@ -1,5 +1,5 @@
-#include <stdio.h>
-#include <string.h>
+#include <cstdio>
+#include <cstring>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
@@ -29,10 +29,10 @@ typedef enum {
 } ai_type_t;
 static ai_type_t current_ai = AI_DOUBAO;
 
-// 占位，CI编译时自动替换为secrets中的token
-#define TOKEN_XIAOZHI  "TOKEN_XIAOZHI"
-#define TOKEN_COZE     "TOKEN_COZE"
-#define TOKEN_DOUBAO   "TOKEN_DOUBAO"
+// 临时占位密钥，后续再改成CI注入
+#define TOKEN_XIAOZHI  "DUMMY_TOKEN"
+#define TOKEN_COZE     "DUMMY_TOKEN"
+#define TOKEN_DOUBAO   "DUMMY_TOKEN"
 
 // AP热点 无密码
 #define AP_SSID "ESP32-AI-Setup"
@@ -73,7 +73,7 @@ static void i2s_mic_init(void)
         .data_out_num = I2S_PIN_NO_CHANGE,
         .data_in_num = I2S_MIC_DIN
     };
-    i2s_driver_install(I2S_MIC_PORT, &i2s_cfg, 0, NULL);
+    i2s_driver_install(I2S_MIC_PORT, &i2s_cfg, 0, nullptr);
     i2s_set_pin(I2S_MIC_PORT, &pin_cfg);
 }
 
@@ -99,7 +99,7 @@ static void wifi_ap_init(void)
     printf("✅ AP热点开启 SSID: %s 无密码\n", AP_SSID);
 }
 
-void app_main(void)
+extern "C" void app_main(void)
 {
     nvs_flash_init();
     esp_netif_init();
