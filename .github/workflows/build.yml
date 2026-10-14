@@ -13,12 +13,6 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Inject API Token into source code
-        run: |
-          sed -i "s|TOKEN_XIAOZHI|${{ secrets.TOKEN_XIAOZHI }}|g" main/app.c
-          sed -i "s|TOKEN_COZE|${{ secrets.TOKEN_COZE }}|g" main/app.c
-          sed -i "s|TOKEN_DOUBAO|${{ secrets.TOKEN_DOUBAO }}|g" main/app.c
-
       - name: Build firmware
         run: |
           idf.py set-target esp32s3
