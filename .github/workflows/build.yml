@@ -1,4 +1,4 @@
-name: Build ESP32S3 Firmware
+name: Build ESP32-S3 AI Firmware
 on:
   push:
     branches: [ main ]
@@ -11,22 +11,28 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
-        with:
-          submodules: 'recursive'
 
-      - name: Build ESP-IDF firmware
-        uses: espressif/esp-idf-ci-action@v1.1.0
+      - name: Setup ESP-IDF v4.4.8
+        uses: espressif/setup-esp-idf-action@v1
         with:
-          esp_idf_version: v5.3.1
+          idf-version: v4.4.8
           target: esp32s3
-          command: |
-            idf.py build
 
-      - name: Upload firmware artifact
+      - name: Inject API Token into source code
+        run: |
+          sed -i "s|TOKEN_XIAOZHI|${{ secrets.TOKEN_XIAOZHI }}|g" main/app.c
+          sed -i "s|TOKEN_COZE|${{ secrets.TOKEN_COZE }}|g" main/app.c
+          sed -i "s|TOKEN_DOUBAO|${{ secrets.TOKEN_DOUBAO }}|g" main/app.c
+
+      - name: Build firmware
+        run: idf.py build
+
+      - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-firmware
+          name: firmware
           path: |
+            build/merged-binary.bin
             build/bootloader/bootloader.bin
             build/partition_table/partition-table.bin
             build/ai_chat_s3.bin
