@@ -15,11 +15,13 @@ jobs:
 
       - name: Build firmware
         run: |
+          . /opt/esp/idf/export.sh
           idf.py set-target esp32s3
           idf.py build
 
       - name: Copy bin files
         run: |
+          . /opt/esp/idf/export.sh
           cp build/*.bin ./
           cp build/bootloader/bootloader.bin ./
           cp build/partition_table/partition-table.bin ./
