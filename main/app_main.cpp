@@ -9,7 +9,7 @@
 #include "nvs_flash.h"
 #include "esp_wifi.h"
 #include "esp_http_server.h"
-#include "brookesia.h"
+#include "../components/brookesia/brookesia.h"
 
 static const char *TAG = "MULTI_AGENT_WIFI_CFG";
 
