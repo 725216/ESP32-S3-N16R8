@@ -5,7 +5,6 @@
 #include "freertos/event_groups.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
-#include "led_strip.h"
 #include "nvs_flash.h"
 #include "esp_wifi.h"
 #include "esp_http_server.h"
@@ -18,7 +17,6 @@ static const char *TAG = "MULTI_AGENT_WIFI_CFG";
 #define BTN_XIAOZHI_GPIO   GPIO_NUM_2
 #define BTN_COZE_GPIO      GPIO_NUM_3
 #define BTN_DOUBAO_GPIO    GPIO_NUM_4
-#define RGB_LED_GPIO       GPIO_NUM_48
 
 // ========== WIFI配网定义 ==========
 #define AP_SSID "ESP32S3-AI配网"
@@ -36,40 +34,6 @@ enum AgentType {
     AGENT_DOUBAO
 };
 AgentType current_agent = AGENT_XIAOZHI;
-static led_strip_handle_t led_strip;
-
-// ========== RGB灯光 ==========
-void set_rgb(uint8_t r, uint8_t g, uint8_t b)
-{
-    led_strip_set_pixel(led_strip, 0, r, g, b);
-    led_strip_refresh(led_strip);
-}
-
-// ========== AI切换 ==========
-void switch_agent(AgentType target)
-{
-    if(current_agent == target) return;
-    current_agent = target;
-    brookesia_stop_session();
-    switch(target)
-    {
-        case AGENT_XIAOZHI:
-            ESP_LOGI(TAG, ">>> 切换到 小智AI");
-            set_rgb(0,30,0); //绿色
-            brookesia_set_agent("xiaozhi");
-            break;
-        case AGENT_COZE:
-            ESP_LOGI(TAG, ">>> 切换到 Coze扣子");
-            set_rgb(30,0,30); //紫色
-            brookesia_set_agent("coze");
-            break;
-        case AGENT_DOUBAO:
-            ESP_LOGI(TAG, ">>> 切换到 豆包");
-            set_rgb(30,30,0); //黄色
-            brookesia_set_agent("doubao");
-            break;
-    }
-}
 
 // ========== HTTP网页配网接口 ==========
 static esp_err_t root_get_handler(httpd_req_t *req)
@@ -182,7 +146,7 @@ void wifi_start_sta(void)
 
     EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,WIFI_CONNECTED_BIT|WIFI_FAIL_BIT,pdFALSE,pdTRUE,pdMS_TO_TICKS(15000));
     if(bits & WIFI_CONNECTED_BIT){
-        set_rgb(0,0,20); //蓝色：WiFi联网成功
+        ESP_LOGI(TAG,"WiFi联网成功");
         is_ap_mode=false;
     }else{
         ESP_LOGW(TAG,"WiFi多次连接失败，切AP热点配网");
@@ -208,7 +172,6 @@ void wifi_start_ap(void)
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP,&ap_cfg));
     ESP_ERROR_CHECK(esp_wifi_start());
     ESP_LOGI(TAG,"AP热点开启：%s，密码：%s",AP_SSID,AP_PASS);
-    set_rgb(40,15,0); //橙色：配网模式
     start_webserver();
 }
 
@@ -232,7 +195,9 @@ void btn_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(30));
             if(gpio_get_level(BTN_XIAOZHI_GPIO) == 0)
             {
-                switch_agent(AGENT_XIAOZHI);
+                ESP_LOGI(TAG, ">>> 切换到 小智AI");
+                brookesia_stop_session();
+                brookesia_set_agent("xiaozhi");
                 while(gpio_get_level(BTN_XIAOZHI_GPIO)==0) vTaskDelay(pdMS_TO_TICKS(10));
             }
         }
@@ -241,7 +206,9 @@ void btn_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(30));
             if(gpio_get_level(BTN_COZE_GPIO) == 0)
             {
-                switch_agent(AGENT_COZE);
+                ESP_LOGI(TAG, ">>> 切换到 Coze扣子");
+                brookesia_stop_session();
+                brookesia_set_agent("coze");
                 while(gpio_get_level(BTN_COZE_GPIO)==0) vTaskDelay(pdMS_TO_TICKS(10));
             }
         }
@@ -250,7 +217,9 @@ void btn_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(30));
             if(gpio_get_level(BTN_DOUBAO_GPIO) == 0)
             {
-                switch_agent(AGENT_DOUBAO);
+                ESP_LOGI(TAG, ">>> 切换到豆包");
+                brookesia_stop_session();
+                brookesia_set_agent("doubao");
                 while(gpio_get_level(BTN_DOUBAO_GPIO)==0) vTaskDelay(pdMS_TO_TICKS(10));
             }
         }
@@ -281,17 +250,6 @@ extern "C" void app_main(void)
     //初始化NVS（保存WiFi账号密码）
     ESP_ERROR_CHECK(nvs_flash_init());
 
-    //RGB初始化
-    led_strip_config_t strip_cfg = {
-        .strip_gpio_num = RGB_LED_GPIO,
-        .max_leds = 1,
-    };
-    led_strip_rmt_config_t rmt_cfg = {
-        .resolution_hz = 10000000,
-    };
-    ESP_ERROR_CHECK(led_strip_new_rmt_device(&strip_cfg, &rmt_cfg, &led_strip));
-    set_rgb(10,10,10);
-
     //WiFi逻辑
     wifi_start_sta();
     if(is_ap_mode){
@@ -301,7 +259,7 @@ extern "C" void app_main(void)
     //语音框架
     brookesia_cfg_t b_cfg = BROOKESIA_DEFAULT_CONFIG();
     ESP_ERROR_CHECK(brookesia_init(&b_cfg));
-    switch_agent(AGENT_XIAOZHI);
+    brookesia_set_agent("xiaozhi");
 
     //按键任务
     xTaskCreate(btn_task, "btn_scan", 4*1024, NULL, 5, NULL);
