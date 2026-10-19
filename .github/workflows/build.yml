@@ -5,40 +5,35 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
-  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout source code
+      - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Install ESP-IDF
-        uses: espressif/install-esp-idf-action@v1
+      - name: Setup ESP-IDF v5.2.1
+        uses: espressif/setup-esp-idf@v1
         with:
-          version: v5.2.1
-
-      - name: Inject API Tokens
-        run: |
-          sed -i "s|TOKEN_XIAOZHI|${{ secrets.TOKEN_XIAOZHI }}|g" main/app_main.cpp
-          sed -i "s|TOKEN_COZE|${{ secrets.COZE_TOKEN }}|g" main/app_main.cpp
-          sed -i "s|TOKEN_DOUBAO|${{ secrets.DOUBAO_APIKEY }}|g" main/app_main.cpp
+          esp-idf-version: v5.2.1
+          target: esp32s3
 
       - name: Build firmware
         run: |
           idf.py set-target esp32s3
           idf.py build
 
-      - name: Collect bin files
+      - name: Copy firmware bins
         run: |
-          mkdir -p firmware_out
-          cp build/bootloader/bootloader.bin firmware_out/
-          cp build/partition_table/partition-table.bin firmware_out/
-          cp build/app.bin firmware_out/
+          cp build/*.bin ./
+          cp build/bootloader/bootloader.bin ./
+          cp build/partition_table/partition-table.bin ./
+          ls -la *.bin
 
       - name: Upload firmware artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-firmware-bin
-          path: firmware_out/
+          name: firmware-output
+          path: |
+            *.bin
