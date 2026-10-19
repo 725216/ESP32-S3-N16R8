@@ -15,17 +15,18 @@ jobs:
       - name: Build Firmware
         run: |
           . /opt/esp/idf/export.sh
-          idf.py set-target esp32s3
+          idf.py -DSDKCONFIG_DEFAULTS=sdkconfig.defaults set-target esp32s3
           idf.py build
 
-      - name: Copy output bins
+      - name: Copy output bins & merge
         run: |
           mkdir -p ./artifacts
           cp build/bootloader/bootloader.bin ./artifacts/
           cp build/partition_table/partition-table.bin ./artifacts/
-          cp build/hello_world.bin ./artifacts/
+          APP_BIN=$(ls build/*.bin | grep -v bootloader | grep -v partition-table)
+          cp "$APP_BIN" ./artifacts/
           . /opt/esp/idf/export.sh
-          esptool.py merge_bin --chip esp32s3 -o ./artifacts/merged.bin 0x1000 build/bootloader/bootloader.bin 0x8000 build/partition_table/partition-table.bin 0x10000 build/hello_world.bin
+          esptool.py merge_bin --chip esp32s3 -o ./artifacts/merged.bin 0x1000 build/bootloader/bootloader.bin 0x8000 build/partition_table/partition-table.bin 0x10000 "$APP_BIN"
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
