@@ -14,11 +14,11 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@v4
 
-      - name: Setup ESP-IDF
-        uses: espressif/setup-espressif-idf@v1
+      # 替换为乐鑫官方可用Action
+      - name: Install ESP-IDF
+        uses: espressif/install-esp-idf-action@v1
         with:
-          esp-idf-version: v5.2.1
-          components: all
+          version: v5.2.1
 
       - name: Inject API Tokens
         run: |
