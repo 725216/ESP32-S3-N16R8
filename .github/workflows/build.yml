@@ -23,8 +23,8 @@ jobs:
       - name: Inject API Tokens
         run: |
           sed -i "s|TOKEN_XIAOZHI|${{ secrets.TOKEN_XIAOZHI }}|g" main/app_main.cpp
-          sed -i "s|TOKEN_COZE|${{ secrets.TOKEN_COZE }}|g" main/app_main.cpp
-          sed -i "s|TOKEN_DOUBAO|${{ secrets.TOKEN_DOUBAO }}|g" main/app_main.cpp
+          sed -i "s|TOKEN_COZE|${{ secrets.COZE_TOKEN }}|g" main/app_main.cpp
+          sed -i "s|TOKEN_DOUBAO|${{ secrets.DOUBAO_APIKEY }}|g" main/app_main.cpp
 
       - name: Build firmware
         run: |
