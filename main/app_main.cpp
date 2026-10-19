@@ -124,8 +124,10 @@ void wifi_start_sta(void)
     nvs_handle_t nvs;
     char ssid[32]={0},pwd[64]={0};
     nvs_open("wifi_cfg", NVS_READONLY, &nvs);
-    nvs_get_str(nvs,"ssid",ssid,sizeof(ssid));
-    nvs_get_str(nvs,"pwd",pwd,sizeof(pwd));
+    size_t len_ssid = sizeof(ssid);
+    size_t len_pwd = sizeof(pwd);
+    nvs_get_str(nvs, "ssid", ssid, &len_ssid);
+    nvs_get_str(nvs, "pwd", pwd, &len_pwd);
     nvs_close(nvs);
 
     if(strlen(ssid)==0){
