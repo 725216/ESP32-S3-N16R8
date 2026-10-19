@@ -14,7 +14,6 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@v4
 
-      # 替换为乐鑫官方可用Action
       - name: Install ESP-IDF
         uses: espressif/install-esp-idf-action@v1
         with:
