@@ -1,38 +1,36 @@
-name: ESP32S3 Build Firmware
+name: Build ESP32S3-N16R8 Firmware
 on:
   push:
     branches: [ main ]
-  pull_request:
-    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    container: espressif/idf:v5.2.1
     steps:
-      - name: Checkout source
+      - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          submodules: true
 
-      - name: Setup ESP-IDF v5.3
-        uses: espressif/setup-espressif-idf@v1
-        with:
-          esp-idf-version: v5.3
-          target: esp32s3
-
-      - name: Compile & Generate merged bin
+      - name: Build firmware
         run: |
-          idf.py set-target esp32s3
-          idf.py fullclean
+          . /opt/esp/idf/export.sh
+          idf.py -DSDKCONFIG_DEFAULTS=sdkconfig.defaults set-target esp32s3
           idf.py build
-          idf.py merge-bin
 
-      - name: Upload firmware artifact
+      - name: Copy bins + merge merged.bin
+        run: |
+          ls -la build/
+          mkdir -p ./artifacts
+          cp build/bootloader/bootloader.bin ./artifacts/
+          cp build/partition_table/partition-table.bin ./artifacts/
+          APP_BIN=$(ls build/*.bin | grep -v bootloader | grep -v partition-table)
+          cp "$APP_BIN" ./artifacts/
+          . /opt/esp/idf/export.sh
+          esptool.py merge_bin --chip esp32s3 -o ./artifacts/merged.bin 0x1000 build/bootloader/bootloader.bin 0x8000 build/partition_table/partition-table.bin 0x10000 "$APP_BIN"
+
+      - name: Upload firmware artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-firmware
-          path: |
-            build/merged-binary.bin
-            build/bootloader/bootloader.bin
-            build/partition_table/partition-table.bin
-            build/*.bin
+          name: firmware-output
+          path: ./artifacts/*.bin
